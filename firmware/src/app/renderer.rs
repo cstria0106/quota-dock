@@ -16,6 +16,9 @@ const LOADING_DOT_RADIUS: i32 = 8;
 const LOADING_DOT_SPACING: i32 = 34;
 const LOADING_DOT_WAVE_MAX: i32 = 12;
 const LOADING_DOT_BOUNDS_PAD: i32 = 1;
+const LOADING_DOT_FRAME_MS: u64 = 16;
+const LOADING_DOT_PHASE_MS: u64 = 33;
+const LOADING_DOT_STAGGER_PHASES: u64 = 3;
 
 #[derive(Clone, PartialEq)]
 pub struct Scene {
@@ -197,7 +200,7 @@ impl UiObject {
             base_x,
             base_y,
             color: color::TEAL,
-            frame_ms: 33,
+            frame_ms: LOADING_DOT_FRAME_MS,
         })
     }
 
@@ -394,11 +397,20 @@ impl LoadingDotsObject {
     }
 
     fn dot_position(&self, frame: u32, index: i32) -> (i32, i32) {
-        let wave_offsets = [0, -5, -9, -12, -9, -5, 0, 5, 9, 12, 9, 5];
-        let phase = (frame as usize + index as usize * 3) % wave_offsets.len();
+        let wave_offsets = [0i32, -5, -9, -12, -9, -5, 0, 5, 9, 12, 9, 5];
+        let elapsed_ms = u64::from(frame) * self.frame_ms;
+        let stagger_ms = index as u64 * LOADING_DOT_PHASE_MS * LOADING_DOT_STAGGER_PHASES;
+        let cycle_ms = LOADING_DOT_PHASE_MS * wave_offsets.len() as u64;
+        let cycle_time = (elapsed_ms + stagger_ms) % cycle_ms;
+        let phase = (cycle_time / LOADING_DOT_PHASE_MS) as usize;
+        let next_phase = (phase + 1) % wave_offsets.len();
+        let phase_time = (cycle_time % LOADING_DOT_PHASE_MS) as i32;
+        let current_y = wave_offsets[phase];
+        let next_y = wave_offsets[next_phase];
+        let y_offset = current_y + (next_y - current_y) * phase_time / LOADING_DOT_PHASE_MS as i32;
         (
             self.base_x + index * LOADING_DOT_SPACING,
-            self.base_y + wave_offsets[phase],
+            self.base_y + y_offset,
         )
     }
 }

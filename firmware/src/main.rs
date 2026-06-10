@@ -17,7 +17,7 @@ use drivers::touch::Ft3168;
 use network::{AppCommand, NetworkStatus, UsageProviderUpdate, UsageSnapshot};
 
 const DISPLAY_ENABLED: bool = true;
-const MAIN_LOOP_SLEEP_MS: u64 = 20;
+const MAIN_LOOP_SLEEP_MS: u64 = 8;
 const TOUCH_POLL_INTERVAL_MS: u64 = 80;
 const TOUCH_ERROR_LOG_INTERVAL_SECS: u64 = 30;
 const USAGE_COUNTDOWN_REFRESH_SECS: u64 = 60;
