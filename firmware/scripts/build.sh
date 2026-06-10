@@ -65,7 +65,11 @@ fi
 
 source "$LOCAL_IDF_PATH/export.sh"
 
-cargo +esp build --release
+cargo_args=(+esp build --release)
+if [[ -n "${FIRMWARE_FEATURES:-}" ]]; then
+    cargo_args+=(--features "$FIRMWARE_FEATURES")
+fi
+cargo "${cargo_args[@]}"
 
 FLASH_DIR="$ROOT_DIR/target/flash"
 RELEASE_DIR="$ROOT_DIR/target/xtensa-esp32s3-espidf/release"

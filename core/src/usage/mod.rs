@@ -43,6 +43,13 @@ pub struct UsageSnapshot {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UsageProviderUpdate {
+    pub provider: UsageProvider,
+    pub updated_at: String,
+    pub updated_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UsageProvider {
     pub id: String,
     pub label: String,

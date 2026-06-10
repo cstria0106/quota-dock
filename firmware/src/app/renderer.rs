@@ -467,12 +467,25 @@ impl Renderer {
         }
 
         let dirty_rects = take(&mut self.dirty);
+        #[cfg(feature = "render-timing")]
+        let rect_count = dirty_rects.len();
+        #[cfg(feature = "render-timing")]
+        let dirty_area = dirty_rects.iter().copied().map(rect_area).sum::<i64>();
+        #[cfg(feature = "render-timing")]
+        let started_at = Instant::now();
         let Some(scene) = self.scene.as_ref() else {
             return Ok(());
         };
         for dirty in dirty_rects {
             self.draw(panel, scene, dirty)?;
         }
+        #[cfg(feature = "render-timing")]
+        println!(
+            "render tick: {} ms, rects={}, area={}",
+            started_at.elapsed().as_millis(),
+            rect_count,
+            dirty_area
+        );
         self.rendered_scene.clone_from(&self.scene);
         Ok(())
     }

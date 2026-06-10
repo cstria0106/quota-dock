@@ -6,8 +6,11 @@
 
 use core::ffi::{c_int, c_void};
 use core::mem::{size_of, MaybeUninit};
-use core::ptr::{self, NonNull};
+use core::ptr::NonNull;
 use core::slice;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::time::sleep_ms;
 
@@ -29,6 +32,8 @@ pub const LCD_V_RES: usize = 456;
 const LCD_X_OFFSET: i32 = 0x14;
 const PREFERRED_ROWS_PER_CHUNK: usize = 128;
 const FALLBACK_ROWS_PER_CHUNK: usize = 64;
+const SECOND_BUFFER_MIN_INTERNAL_FREE: usize = 72 * 1024;
+const TRANSFER_WAIT_TIMEOUT_MS: u64 = 2_000;
 
 const ESP_OK: EspErr = 0;
 const ESP_ERR_NO_MEM: EspErr = 0x101;
@@ -111,11 +116,13 @@ extern "C" {
 
 pub struct Sh8601 {
     io: PanelIoHandle,
-    draw_buffer: DmaPixelBuffer,
+    draw_buffers: DmaPixelBuffers,
+    transfer_tracker: Box<TransferTracker>,
 }
 
 impl Sh8601 {
     pub fn new() -> EspResult<Self> {
+        let transfer_tracker = Box::new(TransferTracker::default());
         let buscfg = SpiBusConfig {
             iocfg: [
                 LCD_DATA0, LCD_DATA1, LCD_PCLK, LCD_DATA2, LCD_DATA3, -1, -1, -1, -1,
@@ -135,8 +142,8 @@ impl Sh8601 {
             spi_mode: 0,
             pclk_hz: 40 * 1000 * 1000,
             trans_queue_depth: 3,
-            on_color_trans_done: None,
-            user_ctx: ptr::null_mut(),
+            on_color_trans_done: Some(color_transfer_done),
+            user_ctx: transfer_tracker.as_ref() as *const TransferTracker as *mut c_void,
             lcd_cmd_bits: 32,
             lcd_param_bits: 8,
             cs_ena_pretrans: 0,
@@ -148,7 +155,8 @@ impl Sh8601 {
 
         let panel = Self {
             io: unsafe { io.assume_init() },
-            draw_buffer: DmaPixelBuffer::new_largest()?,
+            draw_buffers: DmaPixelBuffers::new_largest()?,
+            transfer_tracker,
         };
         panel.reset()?;
         panel.init()?;
@@ -181,27 +189,35 @@ impl Sh8601 {
             return Ok(());
         }
 
-        let rows_per_chunk = self.draw_buffer.rows_for_width(width).min(height);
+        let rows_per_chunk = self.draw_buffers.rows_for_width(width).min(height);
+        let completed_before = self.transfer_tracker.completed();
+        let mut queued_transfers = 0;
         for row_start in (y..y + height).step_by(rows_per_chunk) {
+            if queued_transfers >= self.draw_buffers.len() {
+                self.wait_for_transfer_count(
+                    completed_before + queued_transfers + 1 - self.draw_buffers.len(),
+                )?;
+            }
+
             let rows = rows_per_chunk.min(y + height - row_start);
             let len = width * rows;
-            fill_rows(
-                &mut self.draw_buffer.as_mut_slice()[..len],
-                x,
-                row_start,
-                width,
-                rows,
-            );
+            let buffer_index = queued_transfers % self.draw_buffers.len();
+            let pixels = {
+                let buffer = self.draw_buffers.get_mut(buffer_index);
+                fill_rows(&mut buffer.as_mut_slice()[..len], x, row_start, width, rows);
+                buffer.as_ptr()
+            };
             self.draw_bitmap_area(
                 x as i32,
                 row_start as i32,
                 width as i32,
                 rows as i32,
-                self.draw_buffer.as_ptr(),
+                pixels,
             )?;
+            queued_transfers += 1;
         }
 
-        Ok(())
+        self.wait_for_transfer_count(completed_before + queued_transfers)
     }
 
     fn reset(&self) -> EspResult {
@@ -265,8 +281,20 @@ impl Sh8601 {
         )?;
 
         let len = width as usize * rows as usize * size_of::<u16>();
-        self.tx_color(LCD_CMD_RAMWR, pixels.cast(), len)?;
-        self.wait_color_transfer()
+        self.tx_color(LCD_CMD_RAMWR, pixels.cast(), len)
+    }
+
+    fn wait_for_transfer_count(&self, target: usize) -> EspResult {
+        let started_at = Instant::now();
+        while self.transfer_tracker.completed() < target {
+            if started_at.elapsed() >= Duration::from_millis(TRANSFER_WAIT_TIMEOUT_MS) {
+                self.wait_color_transfer()?;
+                self.transfer_tracker.mark_completed(target);
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        Ok(())
     }
 
     fn tx_param(&self, command: i32, data: &[u8]) -> EspResult {
@@ -334,12 +362,60 @@ struct DmaPixelBuffer {
     len: usize,
 }
 
-impl DmaPixelBuffer {
+struct DmaPixelBuffers {
+    buffers: Vec<DmaPixelBuffer>,
+    rows: usize,
+}
+
+impl DmaPixelBuffers {
     fn new_largest() -> EspResult<Self> {
-        Self::new(LCD_H_RES * PREFERRED_ROWS_PER_CHUNK)
-            .or_else(|_| Self::new(LCD_H_RES * FALLBACK_ROWS_PER_CHUNK))
+        Self::new_ping_pong(FALLBACK_ROWS_PER_CHUNK)
+            .or_else(|_| Self::new_single(PREFERRED_ROWS_PER_CHUNK))
+            .or_else(|_| Self::new_single(FALLBACK_ROWS_PER_CHUNK))
     }
 
+    fn new_ping_pong(rows: usize) -> EspResult<Self> {
+        let first = DmaPixelBuffer::new(LCD_H_RES * rows)?;
+        let second_len = LCD_H_RES * rows;
+        if internal_heap_free() < second_len * size_of::<u16>() + SECOND_BUFFER_MIN_INTERNAL_FREE {
+            return Err(ESP_ERR_NO_MEM);
+        }
+
+        let second = DmaPixelBuffer::new(second_len)?;
+        println!("Display DMA buffers: 2 x {rows} rows");
+        Ok(Self {
+            buffers: vec![first, second],
+            rows,
+        })
+    }
+
+    fn new_single(rows: usize) -> EspResult<Self> {
+        println!("Display DMA buffers: 1 x {rows} rows");
+        Ok(Self {
+            buffers: vec![DmaPixelBuffer::new(LCD_H_RES * rows)?],
+            rows,
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.buffers.len()
+    }
+
+    fn get_mut(&mut self, index: usize) -> &mut DmaPixelBuffer {
+        &mut self.buffers[index]
+    }
+
+    fn rows_for_width(&self, width: usize) -> usize {
+        self.rows.min(
+            self.buffers
+                .first()
+                .map(|buffer| buffer.rows_for_width(width))
+                .unwrap_or(1),
+        )
+    }
+}
+
+impl DmaPixelBuffer {
     fn new(len: usize) -> EspResult<Self> {
         let pixels =
             unsafe { heap_caps_malloc(len * size_of::<u16>(), MALLOC_CAP_DMA) }.cast::<u16>();
@@ -367,6 +443,36 @@ impl Drop for DmaPixelBuffer {
     fn drop(&mut self) {
         unsafe { heap_caps_free(self.pixels.as_ptr().cast()) };
     }
+}
+
+#[derive(Default)]
+struct TransferTracker {
+    completed: AtomicUsize,
+}
+
+impl TransferTracker {
+    fn completed(&self) -> usize {
+        self.completed.load(Ordering::Acquire)
+    }
+
+    fn mark_completed(&self, target: usize) {
+        self.completed.store(target, Ordering::Release);
+    }
+}
+
+extern "C" fn color_transfer_done(
+    _io: PanelIoHandle,
+    _event: *mut c_void,
+    user_ctx: *mut c_void,
+) -> bool {
+    if let Some(tracker) = unsafe { user_ctx.cast::<TransferTracker>().as_ref() } {
+        tracker.completed.fetch_add(1, Ordering::Release);
+    }
+    false
+}
+
+fn internal_heap_free() -> usize {
+    unsafe { esp_idf_sys::esp_get_free_internal_heap_size() as usize }
 }
 
 fn qspi_command(command: i32) -> i32 {

@@ -1,23 +1,23 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use embedded_svc::http::Method;
-use embedded_svc::io::{Read, Write as EspWrite};
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::peripherals::Peripherals;
-use esp_idf_svc::http::server::{Configuration as HttpConfiguration, EspHttpServer};
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs};
 use esp_idf_svc::wifi::{BlockingWifi, EspWifi};
 use heapless::String as HeaplessString;
 use serde::{Deserialize, Serialize};
 
-const MAX_HTTP_BODY: usize = 64 * 1024;
-const HTTP_READ_BUFFER: usize = 1024;
+const MAX_FRAME_BODY: usize = 64 * 1024;
+const PROTOCOL_PORT: u16 = 3333;
+const SERIAL_FRAME_MAGIC: &[u8; 4] = b"MONP";
 const COMMAND_QUEUE_CAPACITY: usize = 8;
 const NETWORK_STACK_SIZE: usize = 24 * 1024;
+const PROTOCOL_STACK_SIZE: usize = 18 * 1024;
 const SERIAL_STACK_SIZE: usize = 24 * 1024;
 const NVS_NAMESPACE: &str = "monitor";
 const NVS_WIFI_SSID: &str = "wifi_ssid";
@@ -27,13 +27,30 @@ pub type CommandReceiver = mpsc::Receiver<AppCommand>;
 type CommandSender = mpsc::SyncSender<AppCommand>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AppCommand {
     Ping,
     SetBrightness { value: u8 },
     CycleUsageProvider,
     NetworkStatus { status: NetworkStatus },
     UpdateUsage { snapshot: UsageSnapshot },
+    UpdateUsageProvider { update: UsageProviderUpdate },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+enum DeviceCommand {
+    Ping,
+    SetBrightness { value: u8 },
+    CycleUsageProvider,
+}
+
+impl From<DeviceCommand> for AppCommand {
+    fn from(command: DeviceCommand) -> Self {
+        match command {
+            DeviceCommand::Ping => Self::Ping,
+            DeviceCommand::SetBrightness { value } => Self::SetBrightness { value },
+            DeviceCommand::CycleUsageProvider => Self::CycleUsageProvider,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -46,6 +63,14 @@ pub struct NetworkStatus {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UsageSnapshot {
     pub providers: Vec<UsageProvider>,
+    pub updated_at: String,
+    #[serde(default)]
+    pub updated_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UsageProviderUpdate {
+    pub provider: UsageProvider,
     pub updated_at: String,
     #[serde(default)]
     pub updated_at_unix: u64,
@@ -113,18 +138,23 @@ struct StatusResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
 enum SerialRequest {
     Status,
     SetWifi { ssid: String, password: String },
     ClearWifi,
-    Command { command: AppCommand },
+    Command(DeviceCommand),
 }
 
 #[derive(Clone, Debug, Serialize)]
 struct ApiResponse {
     ok: bool,
     message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+enum SerialReply {
+    Status(StatusResponse),
+    Api(ApiResponse),
 }
 
 #[derive(Clone, Debug)]
@@ -180,7 +210,7 @@ fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
     start_serial_task(command_tx.clone(), credential_tx, state.clone());
 
     set_event(&state, "boot_load_wifi_config");
-    let mut server: Option<EspHttpServer<'static>> = None;
+    let mut protocol_started = false;
 
     if let Some(credentials) = load_credentials(nvs_partition.clone())? {
         send_network_status(&command_tx, true, false, None);
@@ -189,11 +219,12 @@ fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
             set_event(&state, "stored_wifi_connect_failed");
             send_network_status(&command_tx, true, false, None);
             println!("Stored Wi-Fi credentials failed: {err:?}");
-        } else if server.is_none() {
+        } else if !protocol_started {
             send_current_network_status(&command_tx, &state, true);
-            set_event(&state, "http_server_start");
-            server = Some(start_http_server(command_tx.clone(), state.clone())?);
-            set_event(&state, "http_server_ready");
+            set_event(&state, "protocol_server_start");
+            start_protocol_server(command_tx.clone(), state.clone())?;
+            protocol_started = true;
+            set_event(&state, "protocol_server_ready");
             send_current_network_status(&command_tx, &state, true);
         }
     } else {
@@ -223,11 +254,12 @@ fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
                             set_event(&state, "provisioned_wifi_connect_failed");
                             send_network_status(&command_tx, true, false, None);
                             println!("Provisioned Wi-Fi credentials failed: {err:?}");
-                        } else if server.is_none() {
+                        } else if !protocol_started {
                             send_current_network_status(&command_tx, &state, true);
-                            set_event(&state, "http_server_start");
-                            server = Some(start_http_server(command_tx.clone(), state.clone())?);
-                            set_event(&state, "http_server_ready");
+                            set_event(&state, "protocol_server_start");
+                            start_protocol_server(command_tx.clone(), state.clone())?;
+                            protocol_started = true;
+                            set_event(&state, "protocol_server_ready");
                             send_current_network_status(&command_tx, &state, true);
                         } else {
                             send_current_network_status(&command_tx, &state, true);
@@ -243,7 +275,6 @@ fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
                     let _ = response_tx.send(clear_result);
 
                     if did_clear {
-                        server = None;
                         send_network_status(&command_tx, false, false, None);
                         set_event(&state, "wifi_credentials_cleared");
                     }
@@ -251,7 +282,6 @@ fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
             }
         }
 
-        let _ = &mut server;
         thread::sleep(Duration::from_secs(5));
     }
 }
@@ -288,63 +318,68 @@ fn start_serial_task(
     thread::Builder::new()
         .stack_size(SERIAL_STACK_SIZE)
         .spawn(move || {
-            let stdin = io::stdin();
+            let mut stdin = io::stdin();
             let mut stdout = io::stdout();
+            let mut input = Vec::new();
+            let mut buffer = [0_u8; 128];
 
-            for line in stdin.lock().lines() {
-                let response = match line {
-                    Ok(line) if line.trim().is_empty() => continue,
-                    Ok(line) => handle_serial_line(&line, &command_tx, &credential_tx, &state),
+            loop {
+                match stdin.read(&mut buffer) {
+                    Ok(0) => {
+                        thread::sleep(Duration::from_millis(20));
+                    }
+                    Ok(len) => {
+                        input.extend_from_slice(&buffer[..len]);
+                        while let Some(frame) = match try_take_serial_frame(&mut input) {
+                            Ok(frame) => frame,
+                            Err(err) => {
+                                println!("Serial frame failed: {err:?}");
+                                None
+                            }
+                        } {
+                            let reply = match postcard::from_bytes::<SerialRequest>(&frame) {
+                                Ok(request) => handle_serial_request(
+                                    request,
+                                    &command_tx,
+                                    &credential_tx,
+                                    &state,
+                                ),
+                                Err(err) => {
+                                    println!("Invalid serial request: {err}");
+                                    continue;
+                                }
+                            };
+
+                            match postcard::to_allocvec(&reply) {
+                                Ok(body) => {
+                                    let _ = write_serial_frame(&mut stdout, &body);
+                                }
+                                Err(err) => println!("Serial reply encode failed: {err}"),
+                            }
+                        }
+                    }
                     Err(err)
                         if err.kind() == io::ErrorKind::WouldBlock
                             || err.raw_os_error() == Some(11) =>
                     {
                         thread::sleep(Duration::from_millis(20));
-                        continue;
                     }
-                    Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(err) => ApiResponse {
-                        ok: false,
-                        message: format!("serial read failed: {err}"),
-                    },
-                };
-
-                match serde_json::to_string(&response) {
-                    Ok(json) => {
-                        let _ = writeln!(stdout, "{json}");
-                        let _ = stdout.flush();
-                    }
-                    Err(err) => {
-                        println!("{{\"ok\":false,\"message\":\"serialize failed: {err}\"}}")
-                    }
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                    Err(err) => println!("Serial read failed: {err}"),
                 }
             }
         })
         .expect("spawn serial task");
 }
 
-fn handle_serial_line(
-    line: &str,
+fn handle_serial_request(
+    request: SerialRequest,
     command_tx: &CommandSender,
     credential_tx: &mpsc::Sender<CredentialRequest>,
     state: &Arc<Mutex<NetworkState>>,
-) -> ApiResponse {
-    let request = match serde_json::from_str::<SerialRequest>(line.trim()) {
-        Ok(request) => request,
-        Err(err) => {
-            return ApiResponse {
-                ok: false,
-                message: format!("invalid request: {err}"),
-            }
-        }
-    };
-
+) -> SerialReply {
     match request {
-        SerialRequest::Status => ApiResponse {
-            ok: true,
-            message: serde_json::to_string(&current_status(state))
-                .unwrap_or_else(|_| "status".to_string()),
-        },
+        SerialRequest::Status => SerialReply::Status(current_status(state)),
         SerialRequest::SetWifi { ssid, password } => {
             set_event(state, "serial_set_wifi_received");
             let (response_tx, response_rx) = mpsc::channel();
@@ -352,14 +387,14 @@ fn handle_serial_line(
                 credentials: WifiCredentials { ssid, password },
                 response_tx,
             }) {
-                return ApiResponse {
+                return SerialReply::Api(ApiResponse {
                     ok: false,
                     message: format!("wifi credential queue failed: {err}"),
-                };
+                });
             }
             set_event(state, "serial_set_wifi_queued");
 
-            match response_rx.recv_timeout(Duration::from_secs(25)) {
+            SerialReply::Api(match response_rx.recv_timeout(Duration::from_secs(25)) {
                 Ok(Ok(())) => ApiResponse {
                     ok: true,
                     message: "wifi credentials saved and queued".to_string(),
@@ -375,20 +410,20 @@ fn handle_serial_line(
                         message: format!("wifi credential save timed out: {err}"),
                     }
                 }
-            }
+            })
         }
         SerialRequest::ClearWifi => {
             set_event(state, "serial_clear_wifi_received");
             let (response_tx, response_rx) = mpsc::channel();
             if let Err(err) = credential_tx.send(CredentialRequest::Clear { response_tx }) {
-                return ApiResponse {
+                return SerialReply::Api(ApiResponse {
                     ok: false,
                     message: format!("wifi credential clear queue failed: {err}"),
-                };
+                });
             }
             set_event(state, "serial_clear_wifi_queued");
 
-            match response_rx.recv_timeout(Duration::from_secs(25)) {
+            SerialReply::Api(match response_rx.recv_timeout(Duration::from_secs(25)) {
                 Ok(Ok(())) => ApiResponse {
                     ok: true,
                     message: "wifi credentials cleared".to_string(),
@@ -404,86 +439,194 @@ fn handle_serial_line(
                         message: format!("wifi credential clear timed out: {err}"),
                     }
                 }
-            }
+            })
         }
-        SerialRequest::Command { command } => match command_tx.send(command) {
-            Ok(()) => ApiResponse {
-                ok: true,
-                message: "command queued".to_string(),
-            },
-            Err(err) => ApiResponse {
-                ok: false,
-                message: format!("command failed: {err}"),
-            },
-        },
+        SerialRequest::Command(command) => {
+            SerialReply::Api(match command_tx.send(command.into()) {
+                Ok(()) => ApiResponse {
+                    ok: true,
+                    message: "command queued".to_string(),
+                },
+                Err(err) => ApiResponse {
+                    ok: false,
+                    message: format!("command failed: {err}"),
+                },
+            })
+        }
     }
 }
 
-fn start_http_server(
+fn try_take_serial_frame(input: &mut Vec<u8>) -> anyhow::Result<Option<Vec<u8>>> {
+    let Some(start) = input
+        .windows(SERIAL_FRAME_MAGIC.len())
+        .position(|window| window == SERIAL_FRAME_MAGIC)
+    else {
+        let keep = SERIAL_FRAME_MAGIC.len().saturating_sub(1);
+        if input.len() > keep {
+            input.drain(..input.len() - keep);
+        }
+        return Ok(None);
+    };
+    if start > 0 {
+        input.drain(..start);
+    }
+    if input.len() < SERIAL_FRAME_MAGIC.len() + 4 {
+        return Ok(None);
+    }
+
+    let len_offset = SERIAL_FRAME_MAGIC.len();
+    let len = u32::from_le_bytes(
+        input[len_offset..len_offset + 4]
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid serial frame length"))?,
+    ) as usize;
+    if len > MAX_FRAME_BODY {
+        anyhow::bail!("serial frame too large: {len} bytes");
+    }
+
+    let body_offset = len_offset + 4;
+    let frame_len = body_offset + len;
+    if input.len() < frame_len {
+        return Ok(None);
+    }
+
+    let body = input[body_offset..frame_len].to_vec();
+    input.drain(..frame_len);
+    Ok(Some(body))
+}
+
+fn write_serial_frame(output: &mut impl Write, body: &[u8]) -> anyhow::Result<()> {
+    if body.len() > MAX_FRAME_BODY {
+        anyhow::bail!("serial frame too large: {} bytes", body.len());
+    }
+    output.write_all(SERIAL_FRAME_MAGIC)?;
+    output.write_all(&(body.len() as u32).to_le_bytes())?;
+    output.write_all(body)?;
+    output.flush()?;
+    Ok(())
+}
+
+fn start_protocol_server(
     command_tx: CommandSender,
     state: Arc<Mutex<NetworkState>>,
-) -> anyhow::Result<EspHttpServer<'static>> {
-    let mut server = EspHttpServer::new(&HttpConfiguration {
-        stack_size: 10240,
-        ..Default::default()
-    })?;
-
-    let status_state = state.clone();
-    server.fn_handler("/status", Method::Get, move |req| {
-        let body = serde_json::to_vec(&current_status(&status_state))?;
-        req.into_ok_response()?.write_all(&body)?;
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    let command_tx_for_command = command_tx.clone();
-    server.fn_handler("/command", Method::Post, move |mut req| {
-        let body = read_body(&mut req)?;
-        let command = serde_json::from_slice::<AppCommand>(&body)?;
-        command_tx_for_command.send(command)?;
-        let response = serde_json::to_vec(&ApiResponse {
-            ok: true,
-            message: "command queued".to_string(),
-        })?;
-        req.into_ok_response()?.write_all(&response)?;
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    server.fn_handler("/usage", Method::Post, move |mut req| {
-        let body = read_body(&mut req)?;
-        let snapshot = serde_json::from_slice::<UsageSnapshot>(&body)?;
-        command_tx.send(AppCommand::UpdateUsage { snapshot })?;
-        let response = serde_json::to_vec(&ApiResponse {
-            ok: true,
-            message: "usage snapshot queued".to_string(),
-        })?;
-        req.into_ok_response()?.write_all(&response)?;
-        Ok::<(), anyhow::Error>(())
-    })?;
-
-    Ok(server)
+) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(("0.0.0.0", PROTOCOL_PORT))?;
+    println!("Device protocol listening on tcp/{PROTOCOL_PORT}");
+    thread::Builder::new()
+        .stack_size(PROTOCOL_STACK_SIZE)
+        .spawn(move || protocol_task(listener, command_tx, state))
+        .expect("spawn protocol task");
+    Ok(())
 }
 
-fn read_body<T>(req: &mut T) -> anyhow::Result<Vec<u8>>
-where
-    T: Read,
-{
-    let mut body = Vec::new();
-    let mut buffer = [0_u8; HTTP_READ_BUFFER];
-
-    loop {
-        let len = req
-            .read(&mut buffer)
-            .map_err(|_| anyhow::anyhow!("request read failed"))?;
-        if len == 0 {
-            break;
-        }
-        body.extend_from_slice(&buffer[..len]);
-        if body.len() > MAX_HTTP_BODY {
-            anyhow::bail!("request body too large");
+fn protocol_task(
+    listener: TcpListener,
+    command_tx: CommandSender,
+    state: Arc<Mutex<NetworkState>>,
+) {
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                if let Err(err) = handle_protocol_client(&mut stream, &command_tx, &state) {
+                    println!("Protocol request failed: {err:?}");
+                }
+            }
+            Err(err) => println!("Protocol accept failed: {err}"),
         }
     }
+}
 
+fn handle_protocol_client(
+    stream: &mut TcpStream,
+    command_tx: &CommandSender,
+    state: &Arc<Mutex<NetworkState>>,
+) -> anyhow::Result<()> {
+    let request_body = read_frame(stream)?;
+    let request = postcard::from_bytes::<DeviceRequest>(&request_body)?;
+    let reply = handle_device_request(request, command_tx, state);
+    let reply_body = postcard::to_allocvec(&reply)?;
+    write_frame(stream, &reply_body)
+}
+
+fn handle_device_request(
+    request: DeviceRequest,
+    command_tx: &CommandSender,
+    state: &Arc<Mutex<NetworkState>>,
+) -> DeviceReply {
+    match request {
+        DeviceRequest::Status => DeviceReply::Status(current_status(state)),
+        DeviceRequest::Command(command) => match command_tx.send(command.into()) {
+            Ok(()) => DeviceReply::Api(ApiResponse {
+                ok: true,
+                message: "command queued".to_string(),
+            }),
+            Err(err) => DeviceReply::Api(ApiResponse {
+                ok: false,
+                message: format!("command failed: {err}"),
+            }),
+        },
+        DeviceRequest::Usage(snapshot) => {
+            match command_tx.send(AppCommand::UpdateUsage { snapshot }) {
+                Ok(()) => DeviceReply::Api(ApiResponse {
+                    ok: true,
+                    message: "usage snapshot queued".to_string(),
+                }),
+                Err(err) => DeviceReply::Api(ApiResponse {
+                    ok: false,
+                    message: format!("usage snapshot failed: {err}"),
+                }),
+            }
+        }
+        DeviceRequest::UsageProvider(update) => {
+            match command_tx.send(AppCommand::UpdateUsageProvider { update }) {
+                Ok(()) => DeviceReply::Api(ApiResponse {
+                    ok: true,
+                    message: "usage provider queued".to_string(),
+                }),
+                Err(err) => DeviceReply::Api(ApiResponse {
+                    ok: false,
+                    message: format!("usage provider failed: {err}"),
+                }),
+            }
+        }
+    }
+}
+
+fn read_frame(stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
+    let mut len_bytes = [0_u8; 4];
+    stream.read_exact(&mut len_bytes)?;
+    let len = u32::from_le_bytes(len_bytes) as usize;
+    if len > MAX_FRAME_BODY {
+        anyhow::bail!("frame too large: {len} bytes");
+    }
+
+    let mut body = vec![0; len];
+    stream.read_exact(&mut body)?;
     Ok(body)
+}
+
+fn write_frame(stream: &mut TcpStream, body: &[u8]) -> anyhow::Result<()> {
+    if body.len() > MAX_FRAME_BODY {
+        anyhow::bail!("frame too large: {} bytes", body.len());
+    }
+    stream.write_all(&(body.len() as u32).to_le_bytes())?;
+    stream.write_all(body)?;
+    stream.flush()?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+enum DeviceRequest {
+    Status,
+    Command(DeviceCommand),
+    Usage(UsageSnapshot),
+    UsageProvider(UsageProviderUpdate),
+}
+
+#[derive(Debug, Serialize)]
+enum DeviceReply {
+    Status(StatusResponse),
+    Api(ApiResponse),
 }
 
 fn set_wifi_mode_sta() -> anyhow::Result<()> {

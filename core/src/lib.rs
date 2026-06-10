@@ -15,18 +15,16 @@ pub struct ApiResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StatusResponse {
+    pub mode: String,
     pub connected: bool,
     pub ip: Option<String>,
-    #[serde(default)]
-    pub heap_free: Option<u32>,
-    #[serde(default)]
-    pub heap_internal_free: Option<u32>,
-    #[serde(default)]
-    pub heap_min_free: Option<u32>,
+    pub event: Option<String>,
+    pub heap_free: u32,
+    pub heap_internal_free: u32,
+    pub heap_min_free: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
 pub enum DeviceCommand {
     Ping,
     SetBrightness { value: u8 },
@@ -38,6 +36,6 @@ pub use config::{
 };
 pub use serial::SerialRequest;
 pub use usage::{
-    ProviderSelection, UsageCollector, UsagePixelArt, UsageProvider, UsageRegistry, UsageSnapshot,
-    UsageWindow, attach_provider_images, strip_provider_images,
+    ProviderSelection, UsageCollector, UsagePixelArt, UsageProvider, UsageProviderUpdate,
+    UsageRegistry, UsageSnapshot, UsageWindow, attach_provider_images, strip_provider_images,
 };

@@ -1,19 +1,21 @@
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use monitor_core::config::{
     read_config_file, resolve_device_url, resolve_flash_inputs, save_board_ip,
 };
 use monitor_core::flash::{flash_firmware, reset_device};
-use monitor_core::http::{http_status, http_usage};
-use monitor_core::serial::{send_serial, serial_port_names};
+use monitor_core::http::{
+    http_command, http_status, http_usage, http_usage_provider, postcard_len,
+};
+use monitor_core::serial::{send_serial, send_serial_status, serial_port_names};
 use monitor_core::usage::UsageTheme;
 use monitor_core::usage::{attach_provider_images, collect_snapshot, strip_provider_images};
 use monitor_core::{
-    ApiResponse, ProviderSelection, SerialRequest, StatusResponse, UsagePixelArt, UsageProvider,
-    UsageSnapshot, UsageWindow,
+    ApiResponse, DeviceCommand, ProviderSelection, SerialRequest, StatusResponse, UsagePixelArt,
+    UsageProvider, UsageProviderUpdate, UsageSnapshot, UsageWindow,
 };
 
 #[cfg(windows)]
@@ -22,6 +24,7 @@ const DEFAULT_PORT: &str = "COM3";
 const DEFAULT_PORT: &str = "/dev/ttyACM0";
 const DEFAULT_BAUD: u32 = 115_200;
 const DEFAULT_CONFIG_FILE: &str = "config.toml";
+const GAUGE_SWEEP_PATTERN: &[u8] = &[5, 25, 50, 75, 95, 75, 50, 25, 10, 40];
 
 #[derive(Parser)]
 #[command(
@@ -80,6 +83,31 @@ enum Commands {
         scenario: TestUsageScenario,
         #[arg(long)]
         no_images: bool,
+    },
+    SmokeTest {
+        device_url: Option<String>,
+        #[arg(long, value_enum, default_value_t = TestUsageScenario::Mixed)]
+        scenario: TestUsageScenario,
+        #[arg(long, default_value_t = 5)]
+        usage_runs: usize,
+        #[arg(long, default_value_t = 6)]
+        cycles: usize,
+        #[arg(long, default_value_t = 10)]
+        gauge_runs: usize,
+        #[arg(long, default_value_t = 500)]
+        usage_delay_ms: u64,
+        #[arg(long, default_value_t = 200)]
+        gauge_delay_ms: u64,
+        #[arg(long, default_value_t = 250)]
+        cycle_delay_ms: u64,
+        #[arg(long, default_value_t = 1_000)]
+        settle_ms: u64,
+        #[arg(long)]
+        no_images: bool,
+        #[arg(long)]
+        repeat_images: bool,
+        #[arg(long)]
+        full_snapshot: bool,
     },
     WatchUsage {
         #[arg(value_name = "DEVICE_URL_OR_PROVIDER")]
@@ -176,10 +204,9 @@ fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
         Commands::SerialStatus => {
-            let response =
-                send_serial(&port, baud, &SerialRequest::Status, Duration::from_secs(6))?;
-            print_api_response("serial status", &response);
-            save_status_ip(&config, &response)?;
+            let status = send_serial_status(&port, baud, Duration::from_secs(6))?;
+            print_status("serial status", &status);
+            save_status_ip(&config, &status)?;
             Ok(())
         }
         Commands::HttpStatus { device_url } => {
@@ -225,6 +252,36 @@ fn run(cli: Cli) -> Result<(), String> {
             print_api_response("push test usage", &response);
             Ok(())
         }
+        Commands::SmokeTest {
+            device_url,
+            scenario,
+            usage_runs,
+            cycles,
+            gauge_runs,
+            usage_delay_ms,
+            gauge_delay_ms,
+            cycle_delay_ms,
+            settle_ms,
+            no_images,
+            repeat_images,
+            full_snapshot,
+        } => smoke_test(
+            &config,
+            device_url,
+            SmokeTestOptions {
+                scenario,
+                include_images: !no_images,
+                repeat_images,
+                full_snapshot,
+                usage_runs,
+                cycles,
+                gauge_runs,
+                usage_delay: Duration::from_millis(usage_delay_ms),
+                gauge_delay: Duration::from_millis(gauge_delay_ms),
+                cycle_delay: Duration::from_millis(cycle_delay_ms),
+                settle: Duration::from_millis(settle_ms),
+            },
+        ),
         Commands::WatchUsage {
             device_url_or_provider,
             provider,
@@ -253,12 +310,295 @@ fn print_api_response(label: &str, response: &ApiResponse) {
     println!("{label}: ok={} message={}", response.ok, response.message);
 }
 
-fn save_status_ip(config: &Path, response: &ApiResponse) -> Result<(), String> {
-    if !response.ok {
-        return Ok(());
+#[derive(Clone, Copy)]
+struct SmokeTestOptions {
+    scenario: TestUsageScenario,
+    include_images: bool,
+    repeat_images: bool,
+    full_snapshot: bool,
+    usage_runs: usize,
+    cycles: usize,
+    gauge_runs: usize,
+    usage_delay: Duration,
+    gauge_delay: Duration,
+    cycle_delay: Duration,
+    settle: Duration,
+}
+
+fn smoke_test(
+    config: &Path,
+    device_url: Option<String>,
+    options: SmokeTestOptions,
+) -> Result<(), String> {
+    let device_url = resolve_device_url(config, device_url)?;
+    let usage_runs = options.usage_runs.max(1);
+    let cycles = options.cycles.max(1);
+    let gauge_runs = options.gauge_runs;
+    let mut failures = 0;
+
+    println!("smoke test report");
+    println!("  device: {device_url}");
+    println!(
+        "  scenario: {:?}, images: {}, repeat_images: {}, usage_mode: {}, usage_runs: {}, gauge_runs: {}, cycles: {}",
+        options.scenario,
+        if options.include_images { "on" } else { "off" },
+        if options.repeat_images { "on" } else { "off" },
+        if options.full_snapshot {
+            "full"
+        } else {
+            "provider"
+        },
+        usage_runs,
+        gauge_runs,
+        cycles
+    );
+
+    let initial_status = match timed_status("initial status", &device_url) {
+        Ok(status) => status,
+        Err(err) => {
+            println!("result: FAIL");
+            return Err(format!("initial status failed: {err}"));
+        }
+    };
+
+    for run in 1..=usage_runs {
+        let include_images = options.include_images && (run == 1 || options.repeat_images);
+        let snapshot = test_usage_snapshot(options.scenario, include_images);
+        if !push_usage_dispatch(
+            &device_url,
+            &snapshot,
+            &format!("usage {run}/{usage_runs}"),
+            Some(if include_images {
+                "images=on"
+            } else {
+                "images=off"
+            }),
+            options.full_snapshot,
+        ) {
+            failures += 1;
+        }
+        thread::sleep(options.usage_delay);
     }
-    let status = serde_json::from_str::<StatusResponse>(&response.message)
-        .map_err(|err| format!("parse serial status response: {err}"))?;
+
+    let gauge_base_time = unix_now();
+    for run in 1..=gauge_runs {
+        let (primary, week, month) = gauge_percents(run - 1);
+        let include_image = options.include_images && run == 1;
+        let snapshot = gauge_sweep_snapshot(gauge_base_time, primary, week, month, include_image);
+        let expected = format!("expected=5h:{primary}% week:{week}% month:{month}%");
+        if !push_usage_dispatch(
+            &device_url,
+            &snapshot,
+            &format!("gauge {run}/{gauge_runs}"),
+            Some(expected.as_str()),
+            options.full_snapshot,
+        ) {
+            failures += 1;
+        }
+        thread::sleep(options.gauge_delay);
+    }
+
+    for cycle in 1..=cycles {
+        let started_at = Instant::now();
+        match http_command(&device_url, &DeviceCommand::CycleUsageProvider) {
+            Ok(response) if response.ok => println!(
+                "cycle {cycle}/{cycles}: OK {} ms message={}",
+                started_at.elapsed().as_millis(),
+                response.message
+            ),
+            Ok(response) => {
+                failures += 1;
+                println!(
+                    "cycle {cycle}/{cycles}: FAIL {} ms message={}",
+                    started_at.elapsed().as_millis(),
+                    response.message
+                );
+            }
+            Err(err) => {
+                failures += 1;
+                println!(
+                    "cycle {cycle}/{cycles}: FAIL {} ms error={err}",
+                    started_at.elapsed().as_millis()
+                );
+            }
+        }
+        thread::sleep(options.cycle_delay);
+    }
+
+    thread::sleep(options.settle);
+    let final_status = match timed_status("final status", &device_url) {
+        Ok(status) => status,
+        Err(err) => {
+            failures += 1;
+            println!("final status: FAIL error={err}");
+            None
+        }
+    };
+
+    print_heap_delta(initial_status.as_ref(), final_status.as_ref());
+    if failures == 0 {
+        println!("result: PASS");
+        Ok(())
+    } else {
+        println!("result: FAIL failures={failures}");
+        Err(format!("smoke test failed with {failures} failure(s)"))
+    }
+}
+
+fn push_usage_dispatch(
+    device_url: &str,
+    snapshot: &UsageSnapshot,
+    label: &str,
+    detail: Option<&str>,
+    full_snapshot: bool,
+) -> bool {
+    if full_snapshot {
+        return push_usage_step(device_url, snapshot, label, detail);
+    }
+
+    let mut ok = true;
+    for (index, provider) in snapshot.providers.iter().cloned().enumerate() {
+        let update = UsageProviderUpdate {
+            provider,
+            updated_at: snapshot.updated_at.clone(),
+            updated_at_unix: snapshot.updated_at_unix,
+        };
+        let provider_label = format!(
+            "{label} provider {}/{} {}",
+            index + 1,
+            snapshot.providers.len(),
+            update.provider.id
+        );
+        if !push_provider_step(device_url, &update, &provider_label, detail) {
+            ok = false;
+        }
+    }
+    ok
+}
+
+fn push_usage_step(
+    device_url: &str,
+    snapshot: &UsageSnapshot,
+    label: &str,
+    detail: Option<&str>,
+) -> bool {
+    let started_at = Instant::now();
+    let payload_bytes = postcard_len(snapshot).unwrap_or_default();
+    let detail = detail
+        .map(|detail| format!(" {detail}"))
+        .unwrap_or_default();
+    match http_usage(device_url, snapshot) {
+        Ok(response) if response.ok => {
+            println!(
+                "{label}: OK {} ms bytes={}{} message={}",
+                started_at.elapsed().as_millis(),
+                payload_bytes,
+                detail,
+                response.message
+            );
+            true
+        }
+        Ok(response) => {
+            println!(
+                "{label}: FAIL {} ms bytes={}{} message={}",
+                started_at.elapsed().as_millis(),
+                payload_bytes,
+                detail,
+                response.message
+            );
+            false
+        }
+        Err(err) => {
+            println!(
+                "{label}: FAIL {} ms bytes={}{} error={err}",
+                started_at.elapsed().as_millis(),
+                payload_bytes,
+                detail
+            );
+            false
+        }
+    }
+}
+
+fn push_provider_step(
+    device_url: &str,
+    update: &UsageProviderUpdate,
+    label: &str,
+    detail: Option<&str>,
+) -> bool {
+    let started_at = Instant::now();
+    let payload_bytes = postcard_len(update).unwrap_or_default();
+    let detail = detail
+        .map(|detail| format!(" {detail}"))
+        .unwrap_or_default();
+    match http_usage_provider(device_url, update) {
+        Ok(response) if response.ok => {
+            println!(
+                "{label}: OK {} ms bytes={}{} message={}",
+                started_at.elapsed().as_millis(),
+                payload_bytes,
+                detail,
+                response.message
+            );
+            true
+        }
+        Ok(response) => {
+            println!(
+                "{label}: FAIL {} ms bytes={}{} message={}",
+                started_at.elapsed().as_millis(),
+                payload_bytes,
+                detail,
+                response.message
+            );
+            false
+        }
+        Err(err) => {
+            println!(
+                "{label}: FAIL {} ms bytes={}{} error={err}",
+                started_at.elapsed().as_millis(),
+                payload_bytes,
+                detail
+            );
+            false
+        }
+    }
+}
+
+fn timed_status(label: &str, device_url: &str) -> Result<Option<StatusResponse>, String> {
+    let started_at = Instant::now();
+    let status = http_status(device_url)?;
+    println!(
+        "{label}: OK {} ms mode={} connected={} ip={} heap_free={} heap_internal={} heap_min={}",
+        started_at.elapsed().as_millis(),
+        status.mode,
+        status.connected,
+        status.ip.as_deref().unwrap_or("-"),
+        status.heap_free,
+        status.heap_internal_free,
+        status.heap_min_free
+    );
+    Ok(Some(status))
+}
+
+fn print_heap_delta(initial: Option<&StatusResponse>, final_status: Option<&StatusResponse>) {
+    let (Some(initial), Some(final_status)) = (initial, final_status) else {
+        println!("heap delta: unavailable");
+        return;
+    };
+
+    println!(
+        "heap delta: free={} internal={} min={}",
+        heap_delta(initial.heap_free, final_status.heap_free),
+        heap_delta(initial.heap_internal_free, final_status.heap_internal_free),
+        heap_delta(initial.heap_min_free, final_status.heap_min_free)
+    );
+}
+
+fn heap_delta(initial: u32, final_value: u32) -> String {
+    format!("{:+}", i64::from(final_value) - i64::from(initial))
+}
+
+fn save_status_ip(config: &Path, status: &StatusResponse) -> Result<(), String> {
     let Some(ip) = status
         .ip
         .as_deref()
@@ -272,6 +612,18 @@ fn save_status_ip(config: &Path, response: &ApiResponse) -> Result<(), String> {
     save_board_ip(config, ip)?;
     println!("saved board IP {ip} to {}", config.display());
     Ok(())
+}
+
+fn print_status(label: &str, status: &StatusResponse) {
+    println!(
+        "{label}: mode={} connected={} ip={} heap_free={} heap_internal={} heap_min={}",
+        status.mode,
+        status.connected,
+        status.ip.as_deref().unwrap_or("-"),
+        status.heap_free,
+        status.heap_internal_free,
+        status.heap_min_free
+    );
 }
 
 fn resolve_usage_target(
@@ -364,6 +716,37 @@ fn to_provider_selection(provider: UsageProviderArg) -> ProviderSelection {
         UsageProviderArg::All => ProviderSelection::All,
         UsageProviderArg::Codex => ProviderSelection::Codex,
         UsageProviderArg::Claude => ProviderSelection::Claude,
+    }
+}
+
+fn gauge_percents(step: usize) -> (u8, u8, u8) {
+    let primary = GAUGE_SWEEP_PATTERN[step % GAUGE_SWEEP_PATTERN.len()];
+    let week = 100_u8.saturating_sub(primary);
+    let month = ((u16::from(primary) + 35) % 101) as u8;
+    (primary, week, month)
+}
+
+fn gauge_sweep_snapshot(
+    now: u64,
+    primary: u8,
+    week: u8,
+    month: u8,
+    include_image: bool,
+) -> UsageSnapshot {
+    UsageSnapshot {
+        providers: vec![test_provider(
+            "GAUGE",
+            "GAUGE",
+            test_opencode_theme(),
+            include_image.then(|| diagonal_art("#18A77A", "#9AF0C8", 96)),
+            vec![
+                test_window("5h", "5h", primary, now + 2 * 3_600 + 22 * 60),
+                test_window("7d", "Week", week, now + 6 * 86_400 + 19 * 3_600),
+                test_window("month", "Month", month, now + 22 * 86_400 + 12 * 3_600),
+            ],
+        )],
+        updated_at: format!("GAUGE TEST {now}"),
+        updated_at_unix: now,
     }
 }
 
@@ -713,6 +1096,49 @@ mod tests {
             }
             _ => panic!("expected push-test-usage command"),
         }
+    }
+
+    #[test]
+    fn smoke_test_accepts_gauge_options() {
+        let cli = Cli::try_parse_from([
+            "cli",
+            "smoke-test",
+            "http://192.168.1.50",
+            "--usage-runs",
+            "2",
+            "--gauge-runs",
+            "4",
+            "--cycles",
+            "3",
+            "--gauge-delay-ms",
+            "50",
+        ])
+        .expect("parse CLI");
+
+        match cli.command {
+            Commands::SmokeTest {
+                device_url,
+                usage_runs,
+                gauge_runs,
+                cycles,
+                gauge_delay_ms,
+                ..
+            } => {
+                assert_eq!(device_url, Some("http://192.168.1.50".to_string()));
+                assert_eq!(usage_runs, 2);
+                assert_eq!(gauge_runs, 4);
+                assert_eq!(cycles, 3);
+                assert_eq!(gauge_delay_ms, 50);
+            }
+            _ => panic!("expected smoke-test command"),
+        }
+    }
+
+    #[test]
+    fn gauge_sweep_moves_up_and_down() {
+        assert_eq!(gauge_percents(0), (5, 95, 40));
+        assert_eq!(gauge_percents(4), (95, 5, 29));
+        assert_eq!(gauge_percents(7), (25, 75, 60));
     }
 
     #[test]

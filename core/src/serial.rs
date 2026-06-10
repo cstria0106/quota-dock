@@ -6,18 +6,25 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serialport::ClearBuffer;
 
-use crate::{ApiResponse, DeviceCommand};
+use crate::{ApiResponse, DeviceCommand, StatusResponse};
 
+const SERIAL_FRAME_MAGIC: &[u8; 4] = b"MONP";
+const SERIAL_MAX_FRAME_BODY: usize = 64 * 1024;
 const SERIAL_OPEN_DELAY_MS: u64 = 500;
 const SERIAL_RETRY_INTERVAL_MS: u64 = 500;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
 pub enum SerialRequest {
     Status,
     SetWifi { ssid: String, password: String },
     ClearWifi,
-    Command { command: DeviceCommand },
+    Command(DeviceCommand),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum SerialReply {
+    Status(StatusResponse),
+    Api(ApiResponse),
 }
 
 pub fn serial_port_names() -> Result<Vec<String>, String> {
@@ -32,13 +39,42 @@ pub fn send_serial(
     request: &SerialRequest,
     timeout: Duration,
 ) -> Result<ApiResponse, String> {
+    let reply = send_serial_reply(port_name, baud, request, timeout)?;
+    match reply {
+        SerialReply::Api(response) => Ok(response),
+        SerialReply::Status(_) => Err("expected api serial reply, got status".to_string()),
+    }
+}
+
+pub fn send_serial_status(
+    port_name: &str,
+    baud: u32,
+    timeout: Duration,
+) -> Result<StatusResponse, String> {
+    let reply = send_serial_reply(port_name, baud, &SerialRequest::Status, timeout)?;
+    match reply {
+        SerialReply::Status(status) => Ok(status),
+        SerialReply::Api(response) => Err(format!("expected status serial reply: {}", response.message)),
+    }
+}
+
+fn send_serial_reply(
+    port_name: &str,
+    baud: u32,
+    request: &SerialRequest,
+    timeout: Duration,
+) -> Result<SerialReply, String> {
     match send_serial_once(port_name, baud, request, timeout, true) {
         Ok(response) => Ok(response),
-        Err(err) if err == "serial response timed out" => {
+        Err(err) if is_retryable_serial_timeout(&err) => {
             send_serial_once(port_name, baud, request, timeout, false)
         }
         Err(err) => Err(err),
     }
+}
+
+fn is_retryable_serial_timeout(err: &str) -> bool {
+    err == "serial response timed out" || err.to_ascii_lowercase().contains("timed out")
 }
 
 fn send_serial_once(
@@ -47,7 +83,7 @@ fn send_serial_once(
     request: &SerialRequest,
     timeout: Duration,
     data_terminal_ready: bool,
-) -> Result<ApiResponse, String> {
+) -> Result<SerialReply, String> {
     configure_serial_terminal(port_name, baud)?;
     let mut port = serialport::new(port_name, baud)
         .timeout(Duration::from_millis(100))
@@ -60,11 +96,11 @@ fn send_serial_once(
         .map_err(|err| format!("set serial RTS: {err}"))?;
     thread::sleep(Duration::from_millis(SERIAL_OPEN_DELAY_MS));
     let _ = port.clear(ClearBuffer::Input);
-    let request = serde_json::to_string(request).map_err(|err| err.to_string())?;
+    let request = postcard::to_allocvec(request).map_err(|err| err.to_string())?;
 
     let started = Instant::now();
     let mut last_write = None;
-    let mut line = Vec::new();
+    let mut input = Vec::new();
     let mut buffer = [0_u8; 64];
     while started.elapsed() < timeout {
         if last_write
@@ -73,30 +109,23 @@ fn send_serial_once(
             })
             .unwrap_or(true)
         {
-            writeln!(port, "{request}").map_err(|err| err.to_string())?;
-            port.flush().map_err(|err| err.to_string())?;
-            last_write = Some(Instant::now());
+            match write_serial_frame(&mut port, &request) {
+                Ok(()) => {
+                    last_write = Some(Instant::now());
+                }
+                Err(err) if is_retryable_serial_timeout(&err) => {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(err) => return Err(err),
+            }
         }
 
         match port.read(&mut buffer) {
             Ok(0) => thread::sleep(Duration::from_millis(50)),
             Ok(len) => {
-                for byte in &buffer[..len] {
-                    if *byte == b'\n' {
-                        if let Ok(text) = std::str::from_utf8(&line) {
-                            let text = text.trim();
-                            if text.starts_with('{')
-                                && let Ok(response) = serde_json::from_str::<ApiResponse>(text)
-                            {
-                                return Ok(response);
-                            }
-                        }
-                        line.clear();
-                    } else if line.len() < 4096 {
-                        line.push(*byte);
-                    } else {
-                        line.clear();
-                    }
+                input.extend_from_slice(&buffer[..len]);
+                if let Some(reply) = try_read_serial_reply(&mut input)? {
+                    return Ok(reply);
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {}
@@ -106,6 +135,57 @@ fn send_serial_once(
     }
 
     Err("serial response timed out".to_string())
+}
+
+fn write_serial_frame(port: &mut dyn Write, body: &[u8]) -> Result<(), String> {
+    if body.len() > SERIAL_MAX_FRAME_BODY {
+        return Err(format!("serial frame too large: {} bytes", body.len()));
+    }
+    port.write_all(SERIAL_FRAME_MAGIC)
+        .and_then(|_| port.write_all(&(body.len() as u32).to_le_bytes()))
+        .and_then(|_| port.write_all(body))
+        .map_err(|err| err.to_string())
+}
+
+fn try_read_serial_reply(input: &mut Vec<u8>) -> Result<Option<SerialReply>, String> {
+    let Some(start) = input
+        .windows(SERIAL_FRAME_MAGIC.len())
+        .position(|window| window == SERIAL_FRAME_MAGIC)
+    else {
+        let keep = SERIAL_FRAME_MAGIC.len().saturating_sub(1);
+        if input.len() > keep {
+            input.drain(..input.len() - keep);
+        }
+        return Ok(None);
+    };
+    if start > 0 {
+        input.drain(..start);
+    }
+    if input.len() < SERIAL_FRAME_MAGIC.len() + 4 {
+        return Ok(None);
+    }
+
+    let len_offset = SERIAL_FRAME_MAGIC.len();
+    let len = u32::from_le_bytes(
+        input[len_offset..len_offset + 4]
+            .try_into()
+            .map_err(|_| "invalid serial frame length".to_string())?,
+    ) as usize;
+    if len > SERIAL_MAX_FRAME_BODY {
+        return Err(format!("serial frame too large: {len} bytes"));
+    }
+
+    let body_offset = len_offset + 4;
+    let frame_len = body_offset + len;
+    if input.len() < frame_len {
+        return Ok(None);
+    }
+
+    let body = input[body_offset..frame_len].to_vec();
+    input.drain(..frame_len);
+    postcard::from_bytes(&body)
+        .map(Some)
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(unix)]

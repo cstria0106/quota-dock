@@ -14,7 +14,7 @@ use app::usage::{
 };
 use drivers::display::{disable_panel, EspResult, Sh8601};
 use drivers::touch::Ft3168;
-use network::{AppCommand, NetworkStatus, UsageSnapshot};
+use network::{AppCommand, NetworkStatus, UsageProviderUpdate, UsageSnapshot};
 
 const DISPLAY_ENABLED: bool = true;
 const MAIN_LOOP_SLEEP_MS: u64 = 20;
@@ -115,6 +115,29 @@ fn run() -> EspResult {
                         selected_provider,
                     );
                 }
+                AppCommand::UpdateUsageProvider { update } => {
+                    apply_provider_update(&mut current_usage, &mut provider_image_cache, update);
+                    if let Some(snapshot) = &current_usage {
+                        if let Some(provider) =
+                            normalize_selected_provider(snapshot, selected_provider)
+                        {
+                            selected_provider = provider;
+                            current_usage_received_at = Some(Instant::now());
+                            last_usage_countdown_refresh = Instant::now();
+                        } else {
+                            current_usage = None;
+                            current_usage_received_at = None;
+                        }
+                    }
+                    refresh_scene(
+                        &mut renderer,
+                        &current_usage,
+                        &provider_image_cache,
+                        current_usage_received_at,
+                        &current_network_status,
+                        selected_provider,
+                    );
+                }
             }
         }
 
@@ -192,10 +215,50 @@ fn run_without_display(commands: network::CommandReceiver) -> ! {
                         snapshot.providers.len()
                     )
                 }
+                AppCommand::UpdateUsageProvider { update } => {
+                    println!(
+                        "Display disabled; usage provider update ignored: {}",
+                        update.provider.id
+                    )
+                }
             }
         }
 
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn apply_provider_update(
+    current_usage: &mut Option<UsageSnapshot>,
+    provider_image_cache: &mut ProviderImageCache,
+    update: UsageProviderUpdate,
+) {
+    let mut snapshot = UsageSnapshot {
+        providers: vec![update.provider],
+        updated_at: update.updated_at,
+        updated_at_unix: update.updated_at_unix,
+    };
+    cache_provider_images(&mut snapshot, provider_image_cache);
+    let Some(provider) = snapshot.providers.pop() else {
+        return;
+    };
+
+    let target = current_usage.get_or_insert_with(|| UsageSnapshot {
+        providers: Vec::new(),
+        updated_at: snapshot.updated_at.clone(),
+        updated_at_unix: snapshot.updated_at_unix,
+    });
+    target.updated_at = snapshot.updated_at;
+    target.updated_at_unix = snapshot.updated_at_unix;
+
+    if let Some(existing) = target
+        .providers
+        .iter_mut()
+        .find(|existing| existing.id.eq_ignore_ascii_case(provider.id.as_str()))
+    {
+        *existing = provider;
+    } else {
+        target.providers.push(provider);
     }
 }
 
