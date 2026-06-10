@@ -23,6 +23,7 @@ const PRIMARY_PROGRESS_OFFSET_Y: i32 = 3;
 const SECONDARY_PROGRESS_OFFSET_Y: i32 = -1;
 const RESET_SCALE: i32 = 2;
 const PRIMARY_ART_SIZE: i32 = 96;
+const MAX_PROVIDER_IMAGE_SIDE: usize = PRIMARY_ART_SIZE as usize;
 const MAX_CACHED_PROVIDER_IMAGES: usize = 6;
 
 #[derive(Default)]
@@ -94,25 +95,32 @@ impl PackedPixelArt {
             return None;
         }
 
-        let width = art.rows.iter().map(|row| row.chars().count()).max()? as i32;
-        let height = art.rows.len() as i32;
-        if width <= 0 || height <= 0 {
+        let width = art.rows.iter().map(|row| row.chars().count()).max()?;
+        let height = art.rows.len();
+        if width == 0
+            || height == 0
+            || width > MAX_PROVIDER_IMAGE_SIDE
+            || height > MAX_PROVIDER_IMAGE_SIDE
+        {
             return None;
         }
 
-        let mut cells = Vec::with_capacity(width as usize * height as usize);
+        let mut cells = Vec::with_capacity(width * height);
         for row in &art.rows {
             let mut row_width = 0;
             for cell in row.chars() {
                 cells.push(palette_index(cell, palette.len()).unwrap_or_default());
                 row_width += 1;
             }
-            cells.resize(cells.len() + width as usize - row_width, 0);
+            if row_width > width {
+                return None;
+            }
+            cells.resize(cells.len() + width - row_width, 0);
         }
 
         Some(Self {
-            width,
-            height,
+            width: width as i32,
+            height: height as i32,
             cells,
             palette,
         })

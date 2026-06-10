@@ -180,14 +180,16 @@ fn resolve_config_path(config_path: &Path, path: &Path) -> PathBuf {
 }
 
 fn pixel_art_from_image(path: &Path) -> Result<UsagePixelArt, String> {
-    let image = image::ImageReader::open(path)
+    let mut image = image::ImageReader::open(path)
         .map_err(|err| format!("open provider image {}: {err}", path.display()))?
         .decode()
         .map_err(|err| format!("decode provider image {}: {err}", path.display()))?
         .to_rgba8();
+    clear_transparent_rgb(&mut image);
     let image = crop_visible(image)
         .ok_or_else(|| format!("provider image {} has no visible pixels", path.display()))?;
-    let image = fit_image(image);
+    let mut image = fit_image(image);
+    clear_transparent_rgb(&mut image);
     let pixels = visible_pixels(&image);
     if pixels.is_empty() {
         return Err(format!(
@@ -219,6 +221,14 @@ fn pixel_art_from_image(path: &Path) -> Result<UsagePixelArt, String> {
             .collect(),
         rows,
     })
+}
+
+fn clear_transparent_rgb(image: &mut RgbaImage) {
+    for pixel in image.pixels_mut() {
+        if pixel[3] < PIXEL_ART_ALPHA_THRESHOLD {
+            *pixel = image::Rgba([0, 0, 0, 0]);
+        }
+    }
 }
 
 fn crop_visible(image: RgbaImage) -> Option<RgbaImage> {
@@ -516,6 +526,32 @@ mod tests {
         assert_eq!(art.palette, vec!["#123456".to_string()]);
         assert!(art.rows.iter().any(|row| row.contains('1')));
         assert!(art.rows.iter().any(|row| row.contains('0')));
+
+        fs::remove_file(image_path).expect("remove image");
+        fs::remove_dir(dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn ignores_transparent_provider_image_rgb() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let image_path = dir.join("transparent-provider.png");
+        let mut image = RgbaImage::new(8, 8);
+        for y in 0..8 {
+            for x in 0..8 {
+                image.put_pixel(x, y, image::Rgba([0, 255, 0, 0]));
+            }
+        }
+        for y in 2..6 {
+            for x in 2..6 {
+                image.put_pixel(x, y, image::Rgba([0x12, 0x34, 0x56, 0xff]));
+            }
+        }
+        image.save(&image_path).expect("save image");
+
+        let art = pixel_art_from_image(&image_path).expect("convert image");
+
+        assert_eq!(art.palette, vec!["#123456".to_string()]);
 
         fs::remove_file(image_path).expect("remove image");
         fs::remove_dir(dir).expect("remove temp dir");

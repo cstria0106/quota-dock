@@ -161,6 +161,7 @@ impl UiObject {
             bounds: Rect::new(x, y, width * pixel, height * pixel),
             pixel,
             width,
+            height,
             cells,
             palette,
         })
@@ -286,6 +287,7 @@ pub struct PixelArtObject {
     bounds: Rect,
     pixel: i32,
     width: i32,
+    height: i32,
     cells: Vec<u8>,
     palette: Vec<Color>,
 }
@@ -296,7 +298,8 @@ impl PixelArtObject {
         if width == 0 {
             return;
         }
-        for (row_index, row) in self.cells.chunks(width).enumerate() {
+        let height = self.height.max(0) as usize;
+        for (row_index, row) in self.cells.chunks(width).take(height).enumerate() {
             for (column_index, cell) in row.iter().enumerate() {
                 if *cell == 0 {
                     continue;
