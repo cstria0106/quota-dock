@@ -6,13 +6,12 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-    HTTP_TIMEOUT, UsageCollector, UsagePixelArt, UsageProvider, UsageRegistry, UsageTheme,
-    home_dir, local, percent_from_value, read_json, unix_now, window,
+    HTTP_TIMEOUT, UsageCollector, UsageProvider, UsageRegistry, UsageTheme, home_dir, local,
+    percent_from_value, read_json, unix_now, window,
 };
 
 pub const PROVIDER_ID: &str = "CLAUDE";
 const THEME_COLOR: &str = "#D97757";
-const PIXEL_ART_SIZE: usize = 32;
 
 pub struct ClaudeUsageCollector;
 
@@ -28,7 +27,7 @@ impl UsageCollector for ClaudeUsageCollector {
                 PROVIDER_ID,
                 "CLAUDE",
                 claude_theme(),
-                claude_pixel_art(),
+                None,
                 claude_log_roots(),
                 err,
             ),
@@ -102,7 +101,7 @@ fn fetch_claude_oauth_provider() -> Result<UsageProvider, String> {
         label: "CLAUDE".to_string(),
         theme_color: Some(THEME_COLOR.to_string()),
         theme: Some(claude_theme()),
-        pixel_art: Some(claude_pixel_art()),
+        pixel_art: None,
         source: "oauth".to_string(),
         account: None,
         plan: oauth
@@ -162,13 +161,6 @@ fn claude_theme() -> UsageTheme {
         primary_panel_soft: "#3A251A".to_string(),
         track: "#3A2B25".to_string(),
         pill: "#3B2B25".to_string(),
-    }
-}
-
-fn claude_pixel_art() -> UsagePixelArt {
-    UsagePixelArt {
-        color: THEME_COLOR.to_string(),
-        rows: vec!["1".repeat(PIXEL_ART_SIZE); PIXEL_ART_SIZE],
     }
 }
 

@@ -5,13 +5,12 @@ use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::Deserialize;
 
 use super::{
-    HTTP_TIMEOUT, UsageCollector, UsagePixelArt, UsageProvider, UsageRegistry, UsageTheme,
-    clamp_percent_i64, codex_home, local, read_json, window,
+    HTTP_TIMEOUT, UsageCollector, UsageProvider, UsageRegistry, UsageTheme, clamp_percent_i64,
+    codex_home, local, read_json, window,
 };
 
 pub const PROVIDER_ID: &str = "CODEX";
 const THEME_COLOR: &str = "#3B82F6";
-const PIXEL_ART_SIZE: usize = 32;
 
 pub struct CodexUsageCollector;
 
@@ -27,7 +26,7 @@ impl UsageCollector for CodexUsageCollector {
                 PROVIDER_ID,
                 "CODEX",
                 codex_theme(),
-                codex_pixel_art(),
+                None,
                 codex_log_roots(),
                 err,
             ),
@@ -111,7 +110,7 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
         label: "CODEX".to_string(),
         theme_color: Some(THEME_COLOR.to_string()),
         theme: Some(codex_theme()),
-        pixel_art: Some(codex_pixel_art()),
+        pixel_art: None,
         source: "oauth".to_string(),
         account: None,
         plan: usage.plan_type.map(|plan| plan.to_ascii_uppercase()),
@@ -133,13 +132,6 @@ fn codex_theme() -> UsageTheme {
         primary_panel_soft: "#1A3154".to_string(),
         track: "#263141".to_string(),
         pill: "#263246".to_string(),
-    }
-}
-
-fn codex_pixel_art() -> UsagePixelArt {
-    UsagePixelArt {
-        color: THEME_COLOR.to_string(),
-        rows: vec!["1".repeat(PIXEL_ART_SIZE); PIXEL_ART_SIZE],
     }
 }
 

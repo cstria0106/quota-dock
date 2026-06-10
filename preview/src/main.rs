@@ -92,7 +92,7 @@ pub mod network {
 
     #[derive(Clone, Debug)]
     pub struct UsagePixelArt {
-        pub color: String,
+        pub palette: Vec<String>,
         pub rows: Vec<String>,
     }
 
@@ -128,20 +128,22 @@ pub mod app {
 
 use app::renderer::Renderer;
 use app::ui::{UI_HEIGHT, UI_WIDTH};
-use app::usage::usage_scene;
+use app::usage::{cache_provider_images, usage_scene, ProviderImageCache};
 use drivers::display::{Sh8601, LCD_H_RES, LCD_V_RES};
 use network::{UsagePixelArt, UsageProvider, UsageSnapshot, UsageTheme, UsageWindow};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let variant = std::env::args().nth(1);
-    let snapshot = sample_snapshot();
+    let mut snapshot = sample_snapshot();
+    let mut image_cache = ProviderImageCache::default();
+    cache_provider_images(&mut snapshot, &mut image_cache);
     fs::create_dir_all("target/previews")?;
 
     if let Some(variant) = variant {
-        render_provider(&snapshot, &variant)?;
+        render_provider(&snapshot, &image_cache, &variant)?;
     } else {
         for provider in &snapshot.providers {
-            render_provider(&snapshot, provider.id.as_str())?;
+            render_provider(&snapshot, &image_cache, provider.id.as_str())?;
         }
     }
     Ok(())
@@ -149,6 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn render_provider(
     snapshot: &UsageSnapshot,
+    image_cache: &ProviderImageCache,
     provider_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let selected_provider = snapshot
@@ -157,7 +160,7 @@ fn render_provider(
         .position(|provider| provider.id.eq_ignore_ascii_case(provider_id))
         .ok_or_else(|| format!("unknown provider: {provider_id}"))?;
 
-    let scene = usage_scene(snapshot, selected_provider, 0);
+    let scene = usage_scene(snapshot, image_cache, selected_provider, 0);
     let panel = Sh8601::new();
     let mut renderer = Renderer::new();
     renderer.set_scene(scene);
@@ -185,7 +188,7 @@ fn sample_snapshot() -> UsageSnapshot {
                 theme(
                     "#3B82F6", "#101823", "#162338", "#111C2D", "#1A3154", "#263141", "#263246",
                 ),
-                filled_art("#3B82F6", 32),
+                Some(filled_art("#3B82F6", 96)),
                 vec![
                     window("5h", "5h", 29, 1_781_098_520),
                     window("7d", "Week", 4, 1_781_695_240),
@@ -197,7 +200,7 @@ fn sample_snapshot() -> UsageSnapshot {
                 theme(
                     "#D97757", "#1D1714", "#2A1E18", "#231912", "#3A251A", "#3A2B25", "#3B2B25",
                 ),
-                filled_art("#D97757", 32),
+                Some(filled_art("#D97757", 96)),
                 vec![
                     window("5h", "5h", 61, 1_781_093_880),
                     window("7d", "Week", 18, 1_781_349_440),
@@ -210,11 +213,23 @@ fn sample_snapshot() -> UsageSnapshot {
                 theme(
                     "#18A77A", "#101B17", "#172820", "#112119", "#1A3A2C", "#25352F", "#243A31",
                 ),
-                filled_art("#18A77A", 32),
+                Some(two_tone_art("#18A77A", "#9AF0C8", 96)),
                 vec![
                     window("5h", "5h", 36, 1_781_105_120),
                     window("7d", "Week", 22, 1_781_550_240),
                     window("month", "Month", 73, 1_782_647_080),
+                ],
+            ),
+            provider(
+                "plain",
+                "PLAIN",
+                theme(
+                    "#7C8CA5", "#141820", "#1B202B", "#151C28", "#202838", "#2A303B", "#2D3442",
+                ),
+                None,
+                vec![
+                    window("5h", "5h", 42, 1_781_103_300),
+                    window("7d", "Week", 13, 1_781_621_700),
                 ],
             ),
         ],
@@ -225,7 +240,7 @@ fn provider(
     id: &str,
     label: &str,
     theme: UsageTheme,
-    pixel_art: UsagePixelArt,
+    pixel_art: Option<UsagePixelArt>,
     windows: Vec<UsageWindow>,
 ) -> UsageProvider {
     UsageProvider {
@@ -233,7 +248,7 @@ fn provider(
         label: label.to_string(),
         theme_color: Some(theme.accent.clone()),
         theme: Some(theme),
-        pixel_art: Some(pixel_art),
+        pixel_art,
         source: "preview".to_string(),
         account: None,
         plan: None,
@@ -274,8 +289,29 @@ fn theme(
 
 fn filled_art(color: &str, size: usize) -> UsagePixelArt {
     UsagePixelArt {
-        color: color.to_string(),
+        palette: vec![color.to_string()],
         rows: vec!["1".repeat(size); size],
+    }
+}
+
+fn two_tone_art(primary: &str, secondary: &str, size: usize) -> UsagePixelArt {
+    let rows = (0..size)
+        .map(|y| {
+            (0..size)
+                .map(|x| {
+                    if x < 6 || y < 6 || x + 6 >= size || y + 6 >= size {
+                        '2'
+                    } else {
+                        '1'
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    UsagePixelArt {
+        palette: vec![primary.to_string(), secondary.to_string()],
+        rows,
     }
 }
 

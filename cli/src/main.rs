@@ -9,7 +9,7 @@ use monitor_core::config::{
 use monitor_core::flash::{flash_firmware, reset_device};
 use monitor_core::http::{http_status, http_usage};
 use monitor_core::serial::{send_serial, serial_port_names};
-use monitor_core::usage::collect_snapshot;
+use monitor_core::usage::{attach_provider_images, collect_snapshot, strip_provider_images};
 use monitor_core::{ApiResponse, ProviderSelection, SerialRequest, StatusResponse, UsageSnapshot};
 
 #[cfg(windows)]
@@ -166,7 +166,7 @@ fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
         Commands::Usage { provider, json } => {
-            let snapshot = collect_snapshot(to_provider_selection(provider));
+            let snapshot = collect_usage_snapshot(&config, to_provider_selection(provider), true)?;
             if json {
                 println!(
                     "{}",
@@ -183,7 +183,7 @@ fn run(cli: Cli) -> Result<(), String> {
         } => {
             let (device_url, provider) =
                 resolve_usage_target(&config, device_url_or_provider, provider)?;
-            let snapshot = collect_snapshot(to_provider_selection(provider));
+            let snapshot = collect_usage_snapshot(&config, to_provider_selection(provider), true)?;
             let response = http_usage(&device_url, &snapshot)?;
             print_api_response("push usage", &response);
             Ok(())
@@ -196,6 +196,7 @@ fn run(cli: Cli) -> Result<(), String> {
             let (device_url, provider) =
                 resolve_usage_target(&config, device_url_or_provider, provider)?;
             watch_usage(
+                &config,
                 &device_url,
                 to_provider_selection(provider),
                 Duration::from_secs(interval_secs.max(5)),
@@ -273,16 +274,43 @@ fn print_usage_snapshot(snapshot: &UsageSnapshot) {
 }
 
 fn watch_usage(
+    config: &Path,
     device_url: &str,
     provider: ProviderSelection,
     interval: Duration,
 ) -> Result<(), String> {
+    let mut include_images = true;
     loop {
-        let snapshot = collect_snapshot(provider);
+        let snapshot = collect_usage_snapshot(config, provider, include_images)?;
         let response = http_usage(device_url, &snapshot)?;
         print_api_response("push usage", &response);
+        include_images = false;
         thread::sleep(interval);
     }
+}
+
+fn collect_usage_snapshot(
+    config_path: &Path,
+    provider: ProviderSelection,
+    include_images: bool,
+) -> Result<UsageSnapshot, String> {
+    let mut snapshot = collect_snapshot(provider);
+    if !include_images {
+        strip_provider_images(&mut snapshot);
+        return Ok(snapshot);
+    }
+
+    if !config_path.is_file() {
+        return Ok(snapshot);
+    }
+    let Some(usage_config) = read_config_file(config_path)?.usage else {
+        return Ok(snapshot);
+    };
+    if usage_config.images.is_empty() {
+        return Ok(snapshot);
+    }
+    attach_provider_images(&mut snapshot, &usage_config.images, config_path)?;
+    Ok(snapshot)
 }
 
 fn parse_provider_arg(value: &str) -> Option<UsageProviderArg> {

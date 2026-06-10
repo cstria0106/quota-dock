@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,8 @@ pub struct MonitorConfig {
     pub wifi: Option<WifiCredentials>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flash: Option<FlashConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<UsageConfig>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -33,6 +36,12 @@ pub struct FlashConfig {
     pub bootloader_bin: Option<PathBuf>,
     pub partition_table_bin: Option<PathBuf>,
     pub offset: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct UsageConfig {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub images: BTreeMap<String, PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

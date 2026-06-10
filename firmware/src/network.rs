@@ -14,7 +14,7 @@ use esp_idf_svc::wifi::{BlockingWifi, EspWifi};
 use heapless::String as HeaplessString;
 use serde::{Deserialize, Serialize};
 
-const MAX_HTTP_BODY: usize = 4096;
+const MAX_HTTP_BODY: usize = 64 * 1024;
 const NETWORK_STACK_SIZE: usize = 24 * 1024;
 const SERIAL_STACK_SIZE: usize = 24 * 1024;
 const NVS_NAMESPACE: &str = "monitor";
@@ -77,7 +77,7 @@ pub struct UsageTheme {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UsagePixelArt {
-    pub color: String,
+    pub palette: Vec<String>,
     pub rows: Vec<String>,
 }
 
@@ -104,6 +104,9 @@ struct StatusResponse {
     connected: bool,
     ip: Option<String>,
     event: Option<String>,
+    heap_free: u32,
+    heap_internal_free: u32,
+    heap_min_free: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -581,6 +584,9 @@ fn current_status(state: &Arc<Mutex<NetworkState>>) -> StatusResponse {
         connected: state.as_ref().map(|state| state.connected).unwrap_or(false),
         ip: state.as_ref().and_then(|state| state.ip.clone()),
         event: state.and_then(|state| state.event.clone()),
+        heap_free: unsafe { esp_idf_sys::esp_get_free_heap_size() },
+        heap_internal_free: unsafe { esp_idf_sys::esp_get_free_internal_heap_size() },
+        heap_min_free: unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() },
     }
 }
 

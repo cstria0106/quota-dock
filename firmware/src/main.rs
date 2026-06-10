@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 
 use app::renderer::{Renderer, Scene};
 use app::status::{network_status_scene, waiting_scene};
-use app::usage::{next_provider_index, normalize_selected_provider, usage_scene};
+use app::usage::{
+    cache_provider_images, next_provider_index, normalize_selected_provider, usage_scene,
+    ProviderImageCache,
+};
 use drivers::display::{disable_panel, EspResult, Sh8601};
 use drivers::touch::Ft3168;
 use network::{AppCommand, NetworkStatus, UsageSnapshot};
@@ -52,6 +55,7 @@ fn run() -> EspResult {
 
     let mut current_usage: Option<UsageSnapshot> = None;
     let mut current_usage_received_at: Option<Instant> = None;
+    let mut provider_image_cache = ProviderImageCache::default();
     let mut current_network_status: Option<NetworkStatus> = None;
     let mut selected_provider = 0;
     let mut was_touching = false;
@@ -67,6 +71,7 @@ fn run() -> EspResult {
                         refresh_scene(
                             &mut renderer,
                             &current_usage,
+                            &provider_image_cache,
                             current_usage_received_at,
                             &current_network_status,
                             selected_provider,
@@ -78,12 +83,14 @@ fn run() -> EspResult {
                     refresh_scene(
                         &mut renderer,
                         &current_usage,
+                        &provider_image_cache,
                         current_usage_received_at,
                         &current_network_status,
                         selected_provider,
                     );
                 }
-                AppCommand::UpdateUsage { snapshot } => {
+                AppCommand::UpdateUsage { mut snapshot } => {
+                    cache_provider_images(&mut snapshot, &mut provider_image_cache);
                     if let Some(provider) =
                         normalize_selected_provider(&snapshot, selected_provider)
                     {
@@ -98,6 +105,7 @@ fn run() -> EspResult {
                     refresh_scene(
                         &mut renderer,
                         &current_usage,
+                        &provider_image_cache,
                         current_usage_received_at,
                         &current_network_status,
                         selected_provider,
@@ -125,6 +133,7 @@ fn run() -> EspResult {
                 refresh_scene(
                     &mut renderer,
                     &current_usage,
+                    &provider_image_cache,
                     current_usage_received_at,
                     &current_network_status,
                     selected_provider,
@@ -139,6 +148,7 @@ fn run() -> EspResult {
             refresh_scene(
                 &mut renderer,
                 &current_usage,
+                &provider_image_cache,
                 current_usage_received_at,
                 &current_network_status,
                 selected_provider,
@@ -192,12 +202,14 @@ fn cycle_provider(current_usage: &Option<UsageSnapshot>, selected_provider: &mut
 fn refresh_scene(
     renderer: &mut Renderer,
     current_usage: &Option<UsageSnapshot>,
+    provider_image_cache: &ProviderImageCache,
     current_usage_received_at: Option<Instant>,
     current_network_status: &Option<NetworkStatus>,
     selected_provider: usize,
 ) {
     renderer.set_scene(current_scene(
         current_usage,
+        provider_image_cache,
         current_usage_received_at,
         current_network_status,
         selected_provider,
@@ -206,6 +218,7 @@ fn refresh_scene(
 
 fn current_scene(
     current_usage: &Option<UsageSnapshot>,
+    provider_image_cache: &ProviderImageCache,
     current_usage_received_at: Option<Instant>,
     current_network_status: &Option<NetworkStatus>,
     selected_provider: usize,
@@ -214,7 +227,12 @@ fn current_scene(
         let elapsed_since_update_secs = current_usage_received_at
             .map(|instant| instant.elapsed().as_secs())
             .unwrap_or_default();
-        return usage_scene(snapshot, selected_provider, elapsed_since_update_secs);
+        return usage_scene(
+            snapshot,
+            provider_image_cache,
+            selected_provider,
+            elapsed_since_update_secs,
+        );
     }
     if let Some(status) = current_network_status {
         return network_status_scene(status);

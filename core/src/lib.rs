@@ -17,6 +17,12 @@ pub struct ApiResponse {
 pub struct StatusResponse {
     pub connected: bool,
     pub ip: Option<String>,
+    #[serde(default)]
+    pub heap_free: Option<u32>,
+    #[serde(default)]
+    pub heap_internal_free: Option<u32>,
+    #[serde(default)]
+    pub heap_min_free: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -27,8 +33,11 @@ pub enum DeviceCommand {
     CycleUsageProvider,
 }
 
-pub use config::{BoardConfig, FlashConfig, FlashInputs, MonitorConfig, WifiCredentials};
+pub use config::{
+    BoardConfig, FlashConfig, FlashInputs, MonitorConfig, UsageConfig, WifiCredentials,
+};
 pub use serial::SerialRequest;
 pub use usage::{
-    ProviderSelection, UsageCollector, UsageProvider, UsageRegistry, UsageSnapshot, UsageWindow,
+    ProviderSelection, UsageCollector, UsagePixelArt, UsageProvider, UsageRegistry, UsageSnapshot,
+    UsageWindow, attach_provider_images, strip_provider_images,
 };

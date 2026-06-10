@@ -3,13 +3,20 @@ pub mod codex;
 
 mod local;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use image::{RgbaImage, imageops};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+const PIXEL_ART_SIZE: u32 = 96;
+const MAX_PIXEL_ART_COLORS: usize = 61;
+const PIXEL_ART_ALPHA_THRESHOLD: u8 = 96;
+const PIXEL_ART_PALETTE_CHARS: &[u8] =
+    b"123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 #[derive(Clone, Copy, Debug)]
 pub enum ProviderSelection {
@@ -61,7 +68,7 @@ pub struct UsageTheme {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UsagePixelArt {
-    pub color: String,
+    pub palette: Vec<String>,
     pub rows: Vec<String>,
 }
 
@@ -123,6 +130,190 @@ impl UsageRegistry {
 
 pub fn collect_snapshot(selection: ProviderSelection) -> UsageSnapshot {
     UsageRegistry::with_default_providers().collect_snapshot(selection)
+}
+
+pub fn attach_provider_images(
+    snapshot: &mut UsageSnapshot,
+    image_paths: &BTreeMap<String, PathBuf>,
+    config_path: &Path,
+) -> Result<(), String> {
+    for provider in &mut snapshot.providers {
+        let Some(path) = provider_image_path(provider, image_paths) else {
+            continue;
+        };
+        let path = resolve_config_path(config_path, path);
+        provider.pixel_art = Some(pixel_art_from_image(&path)?);
+    }
+    Ok(())
+}
+
+pub fn strip_provider_images(snapshot: &mut UsageSnapshot) {
+    for provider in &mut snapshot.providers {
+        provider.pixel_art = None;
+    }
+}
+
+fn provider_image_path<'a>(
+    provider: &UsageProvider,
+    image_paths: &'a BTreeMap<String, PathBuf>,
+) -> Option<&'a PathBuf> {
+    image_paths
+        .iter()
+        .find(|(key, _)| {
+            key.eq_ignore_ascii_case(provider.id.as_str())
+                || key.eq_ignore_ascii_case(provider.label.as_str())
+        })
+        .map(|(_, path)| path)
+}
+
+fn resolve_config_path(config_path: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Ok(suffix) = path.strip_prefix("~") {
+        return home_dir().join(suffix);
+    }
+    config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(path)
+}
+
+fn pixel_art_from_image(path: &Path) -> Result<UsagePixelArt, String> {
+    let image = image::ImageReader::open(path)
+        .map_err(|err| format!("open provider image {}: {err}", path.display()))?
+        .decode()
+        .map_err(|err| format!("decode provider image {}: {err}", path.display()))?
+        .to_rgba8();
+    let image = crop_visible(image)
+        .ok_or_else(|| format!("provider image {} has no visible pixels", path.display()))?;
+    let image = fit_image(image);
+    let pixels = visible_pixels(&image);
+    if pixels.is_empty() {
+        return Err(format!(
+            "provider image {} has no visible pixels after resize",
+            path.display()
+        ));
+    }
+
+    let palette = build_palette(&pixels);
+    let mut rows = Vec::with_capacity(PIXEL_ART_SIZE as usize);
+    for y in 0..PIXEL_ART_SIZE {
+        let mut row = String::with_capacity(PIXEL_ART_SIZE as usize);
+        for x in 0..PIXEL_ART_SIZE {
+            let pixel = image.get_pixel(x, y);
+            if pixel[3] < PIXEL_ART_ALPHA_THRESHOLD {
+                row.push('0');
+            } else {
+                let index = nearest_palette_color(&palette, [pixel[0], pixel[1], pixel[2]]);
+                row.push(PIXEL_ART_PALETTE_CHARS[index] as char);
+            }
+        }
+        rows.push(row);
+    }
+
+    Ok(UsagePixelArt {
+        palette: palette
+            .iter()
+            .map(|[red, green, blue]| format!("#{red:02X}{green:02X}{blue:02X}"))
+            .collect(),
+        rows,
+    })
+}
+
+fn crop_visible(image: RgbaImage) -> Option<RgbaImage> {
+    let (width, height) = image.dimensions();
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0;
+    let mut max_y = 0;
+    for y in 0..height {
+        for x in 0..width {
+            if image.get_pixel(x, y)[3] >= PIXEL_ART_ALPHA_THRESHOLD {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    (min_x <= max_x && min_y <= max_y).then(|| {
+        imageops::crop_imm(&image, min_x, min_y, max_x - min_x + 1, max_y - min_y + 1).to_image()
+    })
+}
+
+fn fit_image(image: RgbaImage) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    let scale = (PIXEL_ART_SIZE as f32 / width as f32).min(PIXEL_ART_SIZE as f32 / height as f32);
+    let resized_w = ((width as f32 * scale).round() as u32).clamp(1, PIXEL_ART_SIZE);
+    let resized_h = ((height as f32 * scale).round() as u32).clamp(1, PIXEL_ART_SIZE);
+    let resized = imageops::resize(&image, resized_w, resized_h, imageops::FilterType::Lanczos3);
+    let mut output = RgbaImage::new(PIXEL_ART_SIZE, PIXEL_ART_SIZE);
+    imageops::overlay(
+        &mut output,
+        &resized,
+        i64::from((PIXEL_ART_SIZE - resized_w) / 2),
+        i64::from((PIXEL_ART_SIZE - resized_h) / 2),
+    );
+    output
+}
+
+fn visible_pixels(image: &RgbaImage) -> Vec<[u8; 3]> {
+    image
+        .pixels()
+        .filter(|pixel| pixel[3] >= PIXEL_ART_ALPHA_THRESHOLD)
+        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+        .collect()
+}
+
+fn build_palette(pixels: &[[u8; 3]]) -> Vec<[u8; 3]> {
+    let mut buckets = BTreeMap::<u16, Bucket>::new();
+    for [red, green, blue] in pixels {
+        let key = (u16::from(red >> 4) << 8) | (u16::from(green >> 4) << 4) | u16::from(blue >> 4);
+        let bucket = buckets.entry(key).or_default();
+        bucket.count += 1;
+        bucket.red += u32::from(*red);
+        bucket.green += u32::from(*green);
+        bucket.blue += u32::from(*blue);
+    }
+
+    let mut buckets = buckets.into_values().collect::<Vec<_>>();
+    buckets.sort_by(|left, right| right.count.cmp(&left.count));
+    buckets
+        .into_iter()
+        .take(MAX_PIXEL_ART_COLORS)
+        .map(|bucket| {
+            [
+                (bucket.red / bucket.count) as u8,
+                (bucket.green / bucket.count) as u8,
+                (bucket.blue / bucket.count) as u8,
+            ]
+        })
+        .collect()
+}
+
+fn nearest_palette_color(palette: &[[u8; 3]], color: [u8; 3]) -> usize {
+    palette
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, candidate)| color_distance(**candidate, color))
+        .map(|(index, _)| index)
+        .unwrap_or_default()
+}
+
+fn color_distance(left: [u8; 3], right: [u8; 3]) -> u32 {
+    let red = i32::from(left[0]) - i32::from(right[0]);
+    let green = i32::from(left[1]) - i32::from(right[1]);
+    let blue = i32::from(left[2]) - i32::from(right[2]);
+    (red * red + green * green + blue * blue) as u32
+}
+
+#[derive(Default)]
+struct Bucket {
+    count: u32,
+    red: u32,
+    green: u32,
+    blue: u32,
 }
 
 pub(crate) fn read_json<T>(path: &Path) -> Result<T, String>
@@ -304,6 +495,33 @@ mod tests {
     }
 
     #[test]
+    fn converts_provider_image_to_palette_pixel_art() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let image_path = dir.join("provider.png");
+        let mut image = RgbaImage::new(4, 4);
+        for x in 1..3 {
+            image.put_pixel(x, 1, image::Rgba([0x12, 0x34, 0x56, 0xff]));
+        }
+        image.save(&image_path).expect("save image");
+
+        let art = pixel_art_from_image(&image_path).expect("convert image");
+
+        assert_eq!(art.rows.len(), PIXEL_ART_SIZE as usize);
+        assert!(
+            art.rows
+                .iter()
+                .all(|row| row.len() == PIXEL_ART_SIZE as usize)
+        );
+        assert_eq!(art.palette, vec!["#123456".to_string()]);
+        assert!(art.rows.iter().any(|row| row.contains('1')));
+        assert!(art.rows.iter().any(|row| row.contains('0')));
+
+        fs::remove_file(image_path).expect("remove image");
+        fs::remove_dir(dir).expect("remove temp dir");
+    }
+
+    #[test]
     fn parses_unix_reset_labels() {
         assert_eq!(reset_unix("unix:1781098000"), Some(1_781_098_000));
     }
@@ -312,5 +530,13 @@ mod tests {
     fn parses_rfc3339_reset_labels() {
         assert_eq!(reset_unix("2026-06-10T12:30:45Z"), Some(1_781_094_645));
         assert_eq!(reset_unix("2026-06-10T21:30:45+09:00"), Some(1_781_094_645));
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("monitor-usage-test-{nanos}"))
     }
 }

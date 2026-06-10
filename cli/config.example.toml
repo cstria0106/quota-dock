@@ -10,3 +10,9 @@ firmware_bin = "firmware/app.bin"
 bootloader_bin = "firmware/bootloader.bin"
 partition_table_bin = "firmware/partition-table.bin"
 offset = "0x10000"
+
+# Optional. Provider images are converted to 96x96 palette pixel art by the CLI.
+# Paths are resolved relative to this config file. ~/... is also supported.
+[usage.images]
+# codex = "~/monitor-codex.png"
+# claude = "~/monitor-claude.png"

@@ -148,19 +148,21 @@ impl UiObject {
         })
     }
 
-    pub fn pixel_art(x: i32, y: i32, pixel: i32, rows: Vec<String>, color: Color) -> Self {
-        let width = rows
-            .iter()
-            .map(|row| row.chars().count())
-            .max()
-            .unwrap_or(0) as i32
-            * pixel;
-        let height = rows.len() as i32 * pixel;
+    pub fn pixel_art(
+        x: i32,
+        y: i32,
+        pixel: i32,
+        width: i32,
+        height: i32,
+        cells: Vec<u8>,
+        palette: Vec<Color>,
+    ) -> Self {
         Self::PixelArt(PixelArtObject {
-            bounds: Rect::new(x, y, width, height),
+            bounds: Rect::new(x, y, width * pixel, height * pixel),
             pixel,
-            rows,
-            color,
+            width,
+            cells,
+            palette,
         })
     }
 
@@ -283,21 +285,29 @@ pub struct RoundedMeterFillObject {
 pub struct PixelArtObject {
     bounds: Rect,
     pixel: i32,
-    rows: Vec<String>,
-    color: Color,
+    width: i32,
+    cells: Vec<u8>,
+    palette: Vec<Color>,
 }
 
 impl PixelArtObject {
     fn draw(&self, ui: &mut UiCanvas<'_>) {
-        for (row_index, row) in self.rows.iter().enumerate() {
-            for (column_index, cell) in row.chars().enumerate() {
-                if cell == '1' {
+        let width = self.width.max(0) as usize;
+        if width == 0 {
+            return;
+        }
+        for (row_index, row) in self.cells.chunks(width).enumerate() {
+            for (column_index, cell) in row.iter().enumerate() {
+                if *cell == 0 {
+                    continue;
+                }
+                if let Some(color) = self.palette.get((*cell - 1) as usize) {
                     ui.rect(
                         self.bounds.x + column_index as i32 * self.pixel,
                         self.bounds.y + row_index as i32 * self.pixel,
                         self.pixel,
                         self.pixel,
-                        self.color,
+                        *color,
                     );
                 }
             }

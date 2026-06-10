@@ -1,7 +1,7 @@
 use crate::app::renderer::{Scene, UiObject};
 use crate::app::status::waiting_scene;
 use crate::app::ui::{color, rgb565, Color, FontFace, TextAlign, UiCanvas, UI_HEIGHT, UI_WIDTH};
-use crate::network::{UsageProvider, UsageSnapshot, UsageWindow};
+use crate::network::{UsagePixelArt, UsageProvider, UsageSnapshot, UsageWindow};
 
 const SCREEN_PAD_X: i32 = 20;
 const PANEL_GAP: i32 = 8;
@@ -23,9 +23,115 @@ const PRIMARY_PROGRESS_OFFSET_Y: i32 = 3;
 const SECONDARY_PROGRESS_OFFSET_Y: i32 = -1;
 const RESET_SCALE: i32 = 2;
 const PRIMARY_ART_SIZE: i32 = 96;
+const MAX_CACHED_PROVIDER_IMAGES: usize = 6;
+
+#[derive(Default)]
+pub struct ProviderImageCache {
+    entries: Vec<CachedProviderImage>,
+}
+
+#[derive(Clone)]
+struct CachedProviderImage {
+    provider_id: String,
+    art: PackedPixelArt,
+}
+
+#[derive(Clone, PartialEq)]
+struct PackedPixelArt {
+    width: i32,
+    height: i32,
+    cells: Vec<u8>,
+    palette: Vec<Color>,
+}
+
+pub fn cache_provider_images(snapshot: &mut UsageSnapshot, cache: &mut ProviderImageCache) {
+    for provider in &mut snapshot.providers {
+        let Some(pixel_art) = provider.pixel_art.take() else {
+            continue;
+        };
+        if let Some(art) = PackedPixelArt::from_wire(&pixel_art) {
+            cache.upsert(provider.id.as_str(), art);
+        }
+    }
+}
+
+impl ProviderImageCache {
+    fn get(&self, provider_id: &str) -> Option<&PackedPixelArt> {
+        self.entries
+            .iter()
+            .find(|entry| entry.provider_id.eq_ignore_ascii_case(provider_id))
+            .map(|entry| &entry.art)
+    }
+
+    fn upsert(&mut self, provider_id: &str, art: PackedPixelArt) {
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.provider_id.eq_ignore_ascii_case(provider_id))
+        {
+            entry.art = art;
+            return;
+        }
+
+        self.entries.push(CachedProviderImage {
+            provider_id: provider_id.to_string(),
+            art,
+        });
+        if self.entries.len() > MAX_CACHED_PROVIDER_IMAGES {
+            self.entries.remove(0);
+        }
+    }
+}
+
+impl PackedPixelArt {
+    fn from_wire(art: &UsagePixelArt) -> Option<Self> {
+        let palette = art
+            .palette
+            .iter()
+            .map(|color| parse_hex_color(color.as_str()))
+            .collect::<Option<Vec<_>>>()?;
+        if palette.is_empty() {
+            return None;
+        }
+
+        let width = art.rows.iter().map(|row| row.chars().count()).max()? as i32;
+        let height = art.rows.len() as i32;
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+
+        let mut cells = Vec::with_capacity(width as usize * height as usize);
+        for row in &art.rows {
+            let mut row_width = 0;
+            for cell in row.chars() {
+                cells.push(palette_index(cell, palette.len()).unwrap_or_default());
+                row_width += 1;
+            }
+            cells.resize(cells.len() + width as usize - row_width, 0);
+        }
+
+        Some(Self {
+            width,
+            height,
+            cells,
+            palette,
+        })
+    }
+}
+
+fn palette_index(cell: char, palette_len: usize) -> Option<u8> {
+    let index = match cell {
+        '1'..='9' => cell as usize - '1' as usize,
+        'A'..='Z' => cell as usize - 'A' as usize + 9,
+        'a'..='z' => cell as usize - 'a' as usize + 35,
+        _ => return None,
+    };
+    (index < palette_len).then_some(index as u8 + 1)
+}
 
 pub fn usage_scene(
     snapshot: &UsageSnapshot,
+    image_cache: &ProviderImageCache,
     selected_provider: usize,
     elapsed_since_update_secs: u64,
 ) -> Scene {
@@ -40,10 +146,11 @@ pub fn usage_scene(
     }
 
     let theme = provider_theme(provider);
+    let pixel_art = image_cache.get(provider.id.as_str());
     let mut scene = Scene::new();
     push_usage_layout(
         &mut scene,
-        provider,
+        pixel_art,
         &windows,
         &theme,
         snapshot
@@ -93,7 +200,7 @@ pub fn next_provider_index(snapshot: &UsageSnapshot, selected_provider: usize) -
 
 fn push_usage_layout(
     scene: &mut Scene,
-    provider: &UsageProvider,
+    pixel_art: Option<&PackedPixelArt>,
     windows: &[&UsageWindow],
     theme: &ThemeColors,
     current_unix: u64,
@@ -101,7 +208,7 @@ fn push_usage_layout(
     let x = SCREEN_PAD_X;
     let width = UI_WIDTH as i32 - SCREEN_PAD_X * 2;
     let screen_h = UI_HEIGHT as i32;
-    let primary_h = PRIMARY_ART_SIZE + PRIMARY_ART_GUTTER_Y * 2;
+    let primary_h = primary_panel_height(pixel_art, windows[0], current_unix);
 
     if windows.len() == 1 {
         let card_h = primary_h;
@@ -112,7 +219,7 @@ fn push_usage_layout(
             card_y,
             width,
             card_h,
-            provider,
+            pixel_art,
             windows[0],
             theme,
             current_unix,
@@ -130,7 +237,7 @@ fn push_usage_layout(
         y,
         width,
         primary_h,
-        provider,
+        pixel_art,
         windows[0],
         theme,
         current_unix,
@@ -176,7 +283,7 @@ fn push_primary_panel(
     y: i32,
     width: i32,
     height: i32,
-    provider: &UsageProvider,
+    pixel_art: Option<&PackedPixelArt>,
     window: &UsageWindow,
     theme: &ThemeColors,
     current_unix: u64,
@@ -192,17 +299,31 @@ fn push_primary_panel(
 
     let art_x = x + PRIMARY_PANEL_GUTTER_X + ROUNDED_RECT_EDGE_INSET;
     let art_y = y + (height - PRIMARY_ART_SIZE) / 2;
-    let has_art = push_pixel_art(scene, provider, art_x, art_y, PRIMARY_ART_SIZE, theme);
+    let has_art = pixel_art.is_some();
+    if let Some(pixel_art) = pixel_art {
+        push_pixel_art(scene, pixel_art, art_x, art_y, PRIMARY_ART_SIZE);
+    }
+
     let body_x = if has_art {
         art_x + PRIMARY_ART_SIZE + PRIMARY_PANEL_GUTTER_X
     } else {
-        x + PRIMARY_PANEL_GUTTER_X + ROUNDED_RECT_EDGE_INSET
+        x + PRIMARY_PANEL_GUTTER_X
     };
     let body_w = x + width - body_x - PRIMARY_PANEL_GUTTER_X;
+    let body_y = if has_art {
+        art_y
+    } else {
+        y + PRIMARY_ART_GUTTER_Y
+    };
+    let body_h = if has_art {
+        PRIMARY_ART_SIZE
+    } else {
+        height - PRIMARY_ART_GUTTER_Y * 2
+    };
 
     push_usage_content(
         scene,
-        RectSpec::new(body_x, art_y, body_w, PRIMARY_ART_SIZE),
+        RectSpec::new(body_x, body_y, body_w, body_h),
         window,
         theme,
         true,
@@ -363,41 +484,21 @@ fn push_usage_content(
     }
 }
 
-fn push_pixel_art(
-    scene: &mut Scene,
-    provider: &UsageProvider,
-    x: i32,
-    y: i32,
-    size: i32,
-    theme: &ThemeColors,
-) -> bool {
-    let Some(art) = provider.pixel_art.as_ref() else {
-        return false;
-    };
-    let width = art
-        .rows
-        .iter()
-        .map(|row| row.chars().count())
-        .max()
-        .unwrap_or(0) as i32;
-    let height = art.rows.len() as i32;
-    let max_side = width.max(height);
-    if max_side <= 0 {
-        return false;
-    }
-
+fn push_pixel_art(scene: &mut Scene, art: &PackedPixelArt, x: i32, y: i32, size: i32) -> bool {
+    let max_side = art.width.max(art.height);
     let pixel = (size / max_side).max(1);
-    let drawn_w = width * pixel;
-    let drawn_h = height * pixel;
+    let drawn_w = art.width * pixel;
+    let drawn_h = art.height * pixel;
     let start_x = x + (size - drawn_w) / 2;
     let start_y = y + (size - drawn_h) / 2;
-    let art_color = parse_hex_color(art.color.as_str()).unwrap_or(theme.accent);
     scene.push(UiObject::pixel_art(
         start_x,
         start_y,
         pixel,
-        art.rows.clone(),
-        art_color,
+        art.width,
+        art.height,
+        art.cells.clone(),
+        art.palette.clone(),
     ));
     true
 }
@@ -471,6 +572,33 @@ fn secondary_panel_height(windows: &[&UsageWindow], current_unix: u64) -> i32 {
         .max()
         .unwrap_or_default()
         + SECONDARY_PANEL_GUTTER_Y * 2
+}
+
+fn primary_panel_height(
+    pixel_art: Option<&PackedPixelArt>,
+    window: &UsageWindow,
+    current_unix: u64,
+) -> i32 {
+    if pixel_art.is_some() {
+        return PRIMARY_ART_SIZE + PRIMARY_ART_GUTTER_Y * 2;
+    }
+
+    primary_content_height(window, current_unix) + PRIMARY_ART_GUTTER_Y * 2
+}
+
+fn primary_content_height(window: &UsageWindow, current_unix: u64) -> i32 {
+    let percent_text = format!("{}%", window.used_percent);
+    let percent_ink_h = text_ink_height(percent_text.as_str(), FontFace::DEFAULT, 3);
+    let reset_ink_h = reset_label(window, current_unix)
+        .as_deref()
+        .map(|reset_text| text_ink_height(reset_text, FontFace::DEFAULT, RESET_SCALE))
+        .unwrap_or_default();
+
+    percent_ink_h.max(USAGE_PILL_H)
+        + SECONDARY_CONTENT_GAP
+        + PROGRESS_H
+        + SECONDARY_CONTENT_GAP
+        + reset_ink_h
 }
 
 fn secondary_content_height(window: &UsageWindow, current_unix: u64) -> i32 {
