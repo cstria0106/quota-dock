@@ -1,94 +1,70 @@
+use crate::app::renderer::{Scene, UiObject};
 use crate::app::text;
-use crate::app::ui::{color, TextAlign, UiCanvas};
-use crate::drivers::display::{EspResult, Sh8601};
+use crate::app::ui::{color, TextAlign, UI_HEIGHT, UI_WIDTH};
 use crate::network::NetworkStatus;
 
-pub fn draw_waiting(panel: &Sh8601) -> EspResult {
-    panel.draw_rows(|output, y, rows| {
-        let mut ui = UiCanvas::new(output, y, rows);
-        ui.dotted_background();
-        draw_usage_wait(&mut ui, None);
-    })
+pub fn waiting_scene() -> Scene {
+    usage_wait_scene(None)
 }
 
-pub fn draw_network_status(
-    panel: &Sh8601,
-    status: &NetworkStatus,
-    loading_frame: u8,
-) -> EspResult {
-    panel.draw_rows(|output, y, rows| {
-        let mut ui = UiCanvas::new(output, y, rows);
-        ui.dotted_background();
-
-        if !status.has_credentials {
-            draw_wifi_setup(&mut ui);
-        } else if status.connected {
-            draw_usage_wait(&mut ui, status.ip.as_deref());
-        } else {
-            draw_wifi_connecting(&mut ui, loading_frame);
-        }
-    })
+pub fn network_status_scene(status: &NetworkStatus) -> Scene {
+    if !status.has_credentials {
+        wifi_setup_scene()
+    } else if status.connected {
+        usage_wait_scene(status.ip.as_deref())
+    } else {
+        wifi_connecting_scene()
+    }
 }
 
-pub fn network_status_is_animating(status: &NetworkStatus) -> bool {
-    status.has_credentials && !status.connected
-}
-
-fn draw_wifi_setup(ui: &mut UiCanvas<'_>) {
-    ui.text(
+fn wifi_setup_scene() -> Scene {
+    let mut scene = Scene::new();
+    scene.push(UiObject::text(
         0,
-        ui.height() / 2 - 16,
-        ui.width(),
+        UI_HEIGHT as i32 / 2 - 16,
+        UI_WIDTH as i32,
         text::SETUP_WIFI,
         2,
         color::TEXT,
         TextAlign::Center,
-    );
+    ));
+    scene
 }
 
-fn draw_wifi_connecting(ui: &mut UiCanvas<'_>, loading_frame: u8) {
-    ui.text(
+fn wifi_connecting_scene() -> Scene {
+    let mut scene = Scene::new();
+    scene.push(UiObject::text(
         0,
         88,
-        ui.width(),
+        UI_WIDTH as i32,
         text::CONNECTING_WIFI,
         2,
         color::TEXT,
         TextAlign::Center,
-    );
-    draw_loading_dots(ui, loading_frame);
+    ));
+    scene.push(UiObject::loading_dots(UI_WIDTH as i32 / 2 - 34, 168));
+    scene
 }
 
-fn draw_usage_wait(ui: &mut UiCanvas<'_>, ip: Option<&str>) {
-    ui.text(
+fn usage_wait_scene(ip: Option<&str>) -> Scene {
+    let mut scene = Scene::new();
+    scene.push(UiObject::text(
         0,
         78,
-        ui.width(),
+        UI_WIDTH as i32,
         text::WAITING_FOR_USAGE,
         2,
         color::TEXT,
         TextAlign::Center,
-    );
-    ui.text(
+    ));
+    scene.push(UiObject::text(
         0,
         148,
-        ui.width(),
+        UI_WIDTH as i32,
         ip.unwrap_or(text::NO_IP),
         2,
         color::MINT,
         TextAlign::Center,
-    );
-}
-
-fn draw_loading_dots(ui: &mut UiCanvas<'_>, loading_frame: u8) {
-    let base_x = ui.width() / 2 - 34;
-    let base_y = 168;
-    let wave_offsets = [0, -5, -9, -12, -9, -5, 0, 5, 9, 12, 9, 5];
-
-    for index in 0..3 {
-        let phase = (loading_frame as usize + index * 3) % wave_offsets.len();
-        let x = base_x + index as i32 * 34;
-        let y = base_y + wave_offsets[phase];
-        ui.circle(x, y, 7, color::TEAL);
-    }
+    ));
+    scene
 }

@@ -1,16 +1,12 @@
+use crate::app::renderer::{Scene, UiObject};
+use crate::app::status::waiting_scene;
 use crate::app::text;
-use crate::app::status::draw_waiting;
-use crate::app::ui::{color, Color, TextAlign, UiCanvas};
-use crate::drivers::display::{EspResult, Sh8601};
+use crate::app::ui::{color, Color, TextAlign, UI_WIDTH};
 use crate::network::{UsageProvider, UsageSnapshot, UsageWindow};
 
-pub fn draw_usage_snapshot(
-    panel: &Sh8601,
-    snapshot: &UsageSnapshot,
-    selected_provider: usize,
-) -> EspResult {
+pub fn usage_scene(snapshot: &UsageSnapshot, selected_provider: usize) -> Scene {
     if snapshot.providers.is_empty() {
-        return draw_waiting(panel);
+        return waiting_scene();
     }
 
     let selected_provider = selected_provider.min(snapshot.providers.len() - 1);
@@ -20,61 +16,66 @@ pub fn draw_usage_snapshot(
     let accent = color_for(primary_percent);
     let percent_text = format!("{primary_percent}%");
     let source = status_label(provider, primary);
+    let width = UI_WIDTH as i32;
+    let mut scene = Scene::new();
 
-    panel.draw_rows(|output, y, rows| {
-        let mut ui = UiCanvas::new(output, y, rows);
-        ui.dotted_background();
-        let width = ui.width();
-        ui.text(
-            24,
-            18,
-            260,
-            provider.label.as_str(),
+    scene.push(UiObject::text(
+        24,
+        18,
+        260,
+        provider.label.as_str(),
+        1,
+        accent,
+        TextAlign::Left,
+    ));
+    if !source.is_empty() {
+        scene.push(UiObject::text(
+            width - 62,
+            20,
+            38,
+            source,
             1,
-            accent,
-            TextAlign::Left,
-        );
-        if !source.is_empty() {
-            ui.text(width - 62, 20, 38, source, 1, color::MUTED, TextAlign::Right);
-        }
+            color::MUTED,
+            TextAlign::Right,
+        ));
+    }
+    scene.push(UiObject::text(
+        24,
+        96,
+        164,
+        percent_text,
+        3,
+        color::TEXT,
+        TextAlign::Center,
+    ));
 
-        ui.text(
-            24,
-            96,
-            164,
-            percent_text.as_str(),
-            3,
-            color::TEXT,
-            TextAlign::Center,
-        );
+    push_window_bar(
+        &mut scene,
+        216,
+        92,
+        text::WINDOW_5H,
+        provider,
+        "5h",
+        color::TEAL,
+        210,
+    );
+    push_window_bar(
+        &mut scene,
+        216,
+        164,
+        text::WINDOW_7D,
+        provider,
+        "7d",
+        color::LAVENDER,
+        210,
+    );
 
-        draw_window_bar(
-            &mut ui,
-            216,
-            92,
-            text::WINDOW_5H,
-            provider,
-            "5h",
-            color::TEAL,
-            210,
-        );
-        draw_window_bar(
-            &mut ui,
-            216,
-            164,
-            text::WINDOW_7D,
-            provider,
-            "7d",
-            color::LAVENDER,
-            210,
-        );
-
-        draw_provider_strip(&mut ui, snapshot, selected_provider);
-    })
+    push_provider_strip(&mut scene, snapshot, selected_provider);
+    scene
 }
 
-fn draw_window_bar(
-    ui: &mut UiCanvas<'_>,
+fn push_window_bar(
+    scene: &mut Scene,
     x: i32,
     y: i32,
     label: &str,
@@ -95,21 +96,36 @@ fn draw_window_bar(
     };
     let percent_text = format!("{percent}%");
 
-    ui.text(x, y - 25, 56, label, 1, color::TEXT, TextAlign::Left);
-    ui.text(
+    scene.push(UiObject::text(
+        x,
+        y - 25,
+        56,
+        label,
+        1,
+        color::TEXT,
+        TextAlign::Left,
+    ));
+    scene.push(UiObject::text(
         x + bar_width - 56,
         y - 22,
         56,
-        percent_text.as_str(),
+        percent_text,
         1,
         color::TEXT,
         TextAlign::Right,
-    );
-    ui.meter_shell(x, y, bar_width, 29, color::PANEL);
-    ui.meter_fill(x + 4, y + 4, bar_width - 8, 21, percent, fill_color);
+    ));
+    scene.push(UiObject::meter(
+        x,
+        y,
+        bar_width,
+        29,
+        percent,
+        fill_color,
+        color::PANEL,
+    ));
 }
 
-fn draw_provider_strip(ui: &mut UiCanvas<'_>, snapshot: &UsageSnapshot, selected_provider: usize) {
+fn push_provider_strip(scene: &mut Scene, snapshot: &UsageSnapshot, selected_provider: usize) {
     let count = snapshot.providers.len().min(3);
     if count == 0 {
         return;
@@ -117,8 +133,7 @@ fn draw_provider_strip(ui: &mut UiCanvas<'_>, snapshot: &UsageSnapshot, selected
 
     let card_width = 86;
     let gap = 8;
-    let start_x =
-        (ui.width() - (count as i32 * card_width + (count as i32 - 1) * gap)) / 2;
+    let start_x = (UI_WIDTH as i32 - (count as i32 * card_width + (count as i32 - 1) * gap)) / 2;
 
     for index in 0..count {
         let provider = &snapshot.providers[index];
@@ -132,8 +147,8 @@ fn draw_provider_strip(ui: &mut UiCanvas<'_>, snapshot: &UsageSnapshot, selected
             color::PANEL
         };
 
-        ui.rect(x, 222, card_width, 42, card_color);
-        ui.text(
+        scene.push(UiObject::rect(x, 222, card_width, 42, card_color));
+        scene.push(UiObject::text(
             x + 7,
             230,
             card_width - 14,
@@ -141,8 +156,15 @@ fn draw_provider_strip(ui: &mut UiCanvas<'_>, snapshot: &UsageSnapshot, selected
             1,
             color::TEXT,
             TextAlign::Center,
-        );
-        ui.meter_fill(x + 7, 252, card_width - 14, 6, percent, color_for(percent));
+        ));
+        scene.push(UiObject::meter_fill(
+            x + 7,
+            252,
+            card_width - 14,
+            6,
+            percent,
+            color_for(percent),
+        ));
     }
 }
 

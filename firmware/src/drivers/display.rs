@@ -156,14 +156,38 @@ impl Sh8601 {
         self.tx_param_raw(command, &[brightness])
     }
 
-    pub fn draw_rows(&self, mut fill_rows: impl FnMut(&mut [u16], usize, usize)) -> EspResult {
-        let mut buffer = DmaPixelBuffer::new(LCD_H_RES * ROWS_PER_CHUNK)?;
+    pub fn draw_area(
+        &self,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        mut fill_rows: impl FnMut(&mut [u16], usize, usize, usize, usize),
+    ) -> EspResult {
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
 
-        for y in (0..LCD_V_RES).step_by(ROWS_PER_CHUNK) {
-            let rows = ROWS_PER_CHUNK.min(LCD_V_RES - y);
-            let len = LCD_H_RES * rows;
-            fill_rows(&mut buffer.as_mut_slice()[..len], y, rows);
-            self.draw_bitmap(y as i32, rows as i32, buffer.as_slice()[..len].as_ptr())?;
+        let x = x.min(LCD_H_RES);
+        let y = y.min(LCD_V_RES);
+        let width = width.min(LCD_H_RES.saturating_sub(x));
+        let height = height.min(LCD_V_RES.saturating_sub(y));
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+
+        let mut buffer = DmaPixelBuffer::new(width * ROWS_PER_CHUNK)?;
+        for row_start in (y..y + height).step_by(ROWS_PER_CHUNK) {
+            let rows = ROWS_PER_CHUNK.min(y + height - row_start);
+            let len = width * rows;
+            fill_rows(&mut buffer.as_mut_slice()[..len], x, row_start, width, rows);
+            self.draw_bitmap_area(
+                x as i32,
+                row_start as i32,
+                width as i32,
+                rows as i32,
+                buffer.as_slice()[..len].as_ptr(),
+            )?;
         }
 
         Ok(())
@@ -197,9 +221,16 @@ impl Sh8601 {
         Ok(())
     }
 
-    fn draw_bitmap(&self, y: i32, rows: i32, pixels: *const u16) -> EspResult {
-        let x_start = LCD_X_OFFSET;
-        let x_end = LCD_X_OFFSET + LCD_H_RES as i32;
+    fn draw_bitmap_area(
+        &self,
+        x: i32,
+        y: i32,
+        width: i32,
+        rows: i32,
+        pixels: *const u16,
+    ) -> EspResult {
+        let x_start = LCD_X_OFFSET + x;
+        let x_end = x_start + width;
         let y_start = y;
         let y_end = y + rows;
 
@@ -222,7 +253,7 @@ impl Sh8601 {
             ],
         )?;
 
-        let len = LCD_H_RES * rows as usize * size_of::<u16>();
+        let len = width as usize * rows as usize * size_of::<u16>();
         self.tx_color(LCD_CMD_RAMWR, pixels.cast(), len)
     }
 

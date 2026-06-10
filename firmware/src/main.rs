@@ -4,10 +4,11 @@ mod network;
 mod time;
 
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use app::status::{draw_network_status, draw_waiting, network_status_is_animating};
-use app::usage::draw_usage_snapshot;
+use app::renderer::{Renderer, Scene};
+use app::status::{network_status_scene, waiting_scene};
+use app::usage::usage_scene;
 use drivers::display::{disable_panel, EspResult, Sh8601};
 use drivers::touch::Ft3168;
 use network::{AppCommand, NetworkStatus, UsageSnapshot};
@@ -44,14 +45,14 @@ fn run() -> EspResult {
         None => println!("No touch detected"),
     }
 
-    println!("Draw waiting usage screen");
-    draw_waiting(&panel)?;
+    println!("Draw initial background");
+    let mut renderer = Renderer::new();
+    renderer.set_scene(Scene::new());
+    renderer.tick(&panel)?;
 
     let mut current_usage: Option<UsageSnapshot> = None;
     let mut current_network_status: Option<NetworkStatus> = None;
     let mut selected_provider = 0;
-    let mut status_animation_frame = 0_u8;
-    let mut last_status_animation = Instant::now();
     let mut was_touching = false;
     let mut touch_error_logged = false;
     loop {
@@ -59,33 +60,38 @@ fn run() -> EspResult {
             match command {
                 AppCommand::Ping => println!("Received ping command"),
                 AppCommand::SetBrightness { value } => panel.set_brightness(value)?,
-                AppCommand::CycleUsageProvider => cycle_provider(
-                    &panel,
-                    &current_usage,
-                    &current_network_status,
-                    status_animation_frame,
-                    &mut selected_provider,
-                )?,
+                AppCommand::CycleUsageProvider => {
+                    cycle_provider(&current_usage, &mut selected_provider);
+                    refresh_scene(
+                        &mut renderer,
+                        &current_usage,
+                        &current_network_status,
+                        selected_provider,
+                    );
+                }
                 AppCommand::NetworkStatus { status } => {
-                    if current_usage.is_none() {
-                        draw_network_status(&panel, &status, status_animation_frame)?;
-                    }
                     current_network_status = Some(status);
+                    refresh_scene(
+                        &mut renderer,
+                        &current_usage,
+                        &current_network_status,
+                        selected_provider,
+                    );
                 }
                 AppCommand::UpdateUsage { snapshot } => {
                     if snapshot.providers.is_empty() {
                         current_usage = None;
-                        if let Some(status) = &current_network_status {
-                            draw_network_status(&panel, status, status_animation_frame)?;
-                        } else {
-                            draw_waiting(&panel)?;
-                        }
                     } else {
                         selected_provider =
                             selected_provider.min(snapshot.providers.len().saturating_sub(1));
-                        draw_usage_snapshot(&panel, &snapshot, selected_provider)?;
                         current_usage = Some(snapshot);
                     }
+                    refresh_scene(
+                        &mut renderer,
+                        &current_usage,
+                        &current_network_status,
+                        selected_provider,
+                    );
                 }
             }
         }
@@ -105,27 +111,17 @@ fn run() -> EspResult {
         };
         if touching && !was_touching {
             println!("Touch cycle provider");
-            cycle_provider(
-                &panel,
+            cycle_provider(&current_usage, &mut selected_provider);
+            refresh_scene(
+                &mut renderer,
                 &current_usage,
                 &current_network_status,
-                status_animation_frame,
-                &mut selected_provider,
-            )?;
+                selected_provider,
+            );
         }
         was_touching = touching;
 
-        if current_usage.is_none() {
-            if let Some(status) = &current_network_status {
-                if network_status_is_animating(status)
-                    && last_status_animation.elapsed() >= Duration::from_millis(55)
-                {
-                    status_animation_frame = status_animation_frame.wrapping_add(1);
-                    last_status_animation = Instant::now();
-                    draw_network_status(&panel, status, status_animation_frame)?;
-                }
-            }
-        }
+        renderer.tick(&panel)?;
         sleep_ms(20);
     }
 }
@@ -157,30 +153,40 @@ fn run_without_display(commands: network::CommandReceiver) -> ! {
     }
 }
 
-fn cycle_provider(
-    panel: &Sh8601,
-    current_usage: &Option<UsageSnapshot>,
-    current_network_status: &Option<NetworkStatus>,
-    status_animation_frame: u8,
-    selected_provider: &mut usize,
-) -> EspResult {
+fn cycle_provider(current_usage: &Option<UsageSnapshot>, selected_provider: &mut usize) {
     let Some(snapshot) = current_usage else {
-        if let Some(status) = current_network_status {
-            draw_network_status(panel, status, status_animation_frame)?;
-            return Ok(());
-        }
-        draw_waiting(panel)?;
-        return Ok(());
+        return;
     };
     if snapshot.providers.is_empty() {
-        if let Some(status) = current_network_status {
-            draw_network_status(panel, status, status_animation_frame)?;
-            return Ok(());
-        }
-        draw_waiting(panel)?;
-        return Ok(());
+        return;
     }
 
     *selected_provider = (*selected_provider + 1) % snapshot.providers.len();
-    draw_usage_snapshot(panel, snapshot, *selected_provider)
+}
+
+fn refresh_scene(
+    renderer: &mut Renderer,
+    current_usage: &Option<UsageSnapshot>,
+    current_network_status: &Option<NetworkStatus>,
+    selected_provider: usize,
+) {
+    renderer.set_scene(current_scene(
+        current_usage,
+        current_network_status,
+        selected_provider,
+    ));
+}
+
+fn current_scene(
+    current_usage: &Option<UsageSnapshot>,
+    current_network_status: &Option<NetworkStatus>,
+    selected_provider: usize,
+) -> Scene {
+    if let Some(snapshot) = current_usage {
+        return usage_scene(snapshot, selected_provider);
+    }
+    if let Some(status) = current_network_status {
+        return network_status_scene(status);
+    }
+    waiting_scene()
 }

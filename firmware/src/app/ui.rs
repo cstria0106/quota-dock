@@ -14,6 +14,75 @@ pub const UI_HEIGHT: usize = if UI_LANDSCAPE_CLOCKWISE {
     PHYSICAL_V_RES
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl Rect {
+    pub const fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
+        Self { x, y, w, h }
+    }
+
+    pub const fn full() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            w: UI_WIDTH as i32,
+            h: UI_HEIGHT as i32,
+        }
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        let x0 = self.x.min(other.x);
+        let y0 = self.y.min(other.y);
+        let x1 = (self.x + self.w).max(other.x + other.w);
+        let y1 = (self.y + self.h).max(other.y + other.h);
+        Self::new(x0, y0, x1 - x0, y1 - y0).clamp_to_screen()
+    }
+
+    pub fn expand(self, amount: i32) -> Self {
+        Self::new(
+            self.x - amount,
+            self.y - amount,
+            self.w + amount * 2,
+            self.h + amount * 2,
+        )
+        .clamp_to_screen()
+    }
+
+    pub fn clamp_to_screen(self) -> Self {
+        let x0 = self.x.max(0).min(UI_WIDTH as i32);
+        let y0 = self.y.max(0).min(UI_HEIGHT as i32);
+        let x1 = (self.x + self.w).max(0).min(UI_WIDTH as i32);
+        let y1 = (self.y + self.h).max(0).min(UI_HEIGHT as i32);
+        Self::new(x0, y0, (x1 - x0).max(0), (y1 - y0).max(0))
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.w <= 0 || self.h <= 0
+    }
+
+    pub fn intersects(self, other: Self) -> bool {
+        let self_x1 = self.x + self.w;
+        let self_y1 = self.y + self.h;
+        let other_x1 = other.x + other.w;
+        let other_y1 = other.y + other.h;
+        self.x < other_x1 && self_x1 > other.x && self.y < other_y1 && self_y1 > other.y
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PhysicalArea {
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
 mod font {
     include!(concat!(env!("OUT_DIR"), "/generated_font.rs"));
 }
@@ -35,7 +104,7 @@ pub mod color {
     pub const SHINE: Color = rgb565(255, 245, 202);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextAlign {
     Left,
     Center,
@@ -44,14 +113,24 @@ pub enum TextAlign {
 
 pub struct UiCanvas<'a> {
     output: &'a mut [u16],
+    physical_x_start: usize,
+    physical_width: usize,
     y_start: usize,
     rows: usize,
 }
 
 impl<'a> UiCanvas<'a> {
-    pub fn new(output: &'a mut [u16], y_start: usize, rows: usize) -> Self {
+    pub fn new_area(
+        output: &'a mut [u16],
+        physical_x_start: usize,
+        y_start: usize,
+        physical_width: usize,
+        rows: usize,
+    ) -> Self {
         Self {
             output,
+            physical_x_start,
+            physical_width,
             y_start,
             rows,
         }
@@ -60,21 +139,18 @@ impl<'a> UiCanvas<'a> {
     pub fn dotted_background(&mut self) {
         for row in 0..self.rows {
             let physical_y = self.y_start + row;
-            for physical_x in 0..PHYSICAL_H_RES {
+            for x_offset in 0..self.physical_width {
+                let physical_x = self.physical_x_start + x_offset;
                 let (x, y) = physical_to_logical(physical_x, physical_y);
                 let dot = (x + y) % 18 == 0;
-                self.output[row * PHYSICAL_H_RES + physical_x] =
+                self.output[row * self.physical_width + x_offset] =
                     if dot { color::BG_DOT } else { color::BG };
             }
         }
     }
 
-    pub fn width(&self) -> i32 {
-        UI_WIDTH as i32
-    }
-
-    pub fn height(&self) -> i32 {
-        UI_HEIGHT as i32
+    pub fn text_height(scale: i32, lines: usize) -> i32 {
+        font::LINE_HEIGHT as i32 * scale.max(1) * lines.max(1) as i32
     }
 
     pub fn text(
@@ -186,14 +262,14 @@ impl<'a> UiCanvas<'a> {
     }
 
     pub fn circle(&mut self, cx: i32, cy: i32, radius: i32, color: Color) {
-        let r2 = radius * radius;
-        let y0 = (cy - radius).max(0);
-        let y1 = (cy + radius).min(UI_HEIGHT as i32 - 1);
-        for y in y0..=y1 {
+        let radius = radius.max(1);
+        let threshold = radius * radius - radius;
+
+        for y in (cy - radius)..=(cy + radius) {
             let dy = y - cy;
-            for x in (cx - radius).max(0)..=(cx + radius).min(UI_WIDTH as i32 - 1) {
+            for x in (cx - radius)..=(cx + radius) {
                 let dx = x - cx;
-                if dx * dx + dy * dy <= r2 {
+                if dx * dx + dy * dy <= threshold {
                     self.set_pixel(x, y, color);
                 }
             }
@@ -207,10 +283,45 @@ impl<'a> UiCanvas<'a> {
         if physical_y < self.y_start || physical_y >= self.y_start + self.rows {
             return;
         }
+        if physical_x < self.physical_x_start
+            || physical_x >= self.physical_x_start + self.physical_width
+        {
+            return;
+        }
 
         let row = physical_y - self.y_start;
-        self.output[row * PHYSICAL_H_RES + physical_x] = color;
+        let col = physical_x - self.physical_x_start;
+        self.output[row * self.physical_width + col] = color;
     }
+}
+
+pub fn logical_rect_to_physical_area(rect: Rect) -> Option<PhysicalArea> {
+    let rect = rect.clamp_to_screen();
+    if rect.is_empty() {
+        return None;
+    }
+
+    let x0 = rect.x;
+    let y0 = rect.y;
+    let x1 = rect.x + rect.w - 1;
+    let y1 = rect.y + rect.h - 1;
+    let points = [
+        logical_to_physical(x0, y0)?,
+        logical_to_physical(x1, y0)?,
+        logical_to_physical(x0, y1)?,
+        logical_to_physical(x1, y1)?,
+    ];
+
+    let min_x = points.iter().map(|(x, _)| *x).min()?;
+    let max_x = points.iter().map(|(x, _)| *x).max()?;
+    let min_y = points.iter().map(|(_, y)| *y).min()?;
+    let max_y = points.iter().map(|(_, y)| *y).max()?;
+    Some(PhysicalArea {
+        x: min_x,
+        y: min_y,
+        w: max_x - min_x + 1,
+        h: max_y - min_y + 1,
+    })
 }
 
 fn logical_to_physical(x: i32, y: i32) -> Option<(usize, usize)> {
