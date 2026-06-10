@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use app::renderer::{Renderer, Scene};
 use app::status::{network_status_scene, waiting_scene};
-use app::usage::usage_scene;
+use app::usage::{next_provider_index, normalize_selected_provider, usage_scene};
 use drivers::display::{disable_panel, EspResult, Sh8601};
 use drivers::touch::Ft3168;
 use network::{AppCommand, NetworkStatus, UsageSnapshot};
@@ -61,13 +61,14 @@ fn run() -> EspResult {
                 AppCommand::Ping => println!("Received ping command"),
                 AppCommand::SetBrightness { value } => panel.set_brightness(value)?,
                 AppCommand::CycleUsageProvider => {
-                    cycle_provider(&current_usage, &mut selected_provider);
-                    refresh_scene(
-                        &mut renderer,
-                        &current_usage,
-                        &current_network_status,
-                        selected_provider,
-                    );
+                    if cycle_provider(&current_usage, &mut selected_provider) {
+                        refresh_scene(
+                            &mut renderer,
+                            &current_usage,
+                            &current_network_status,
+                            selected_provider,
+                        );
+                    }
                 }
                 AppCommand::NetworkStatus { status } => {
                     current_network_status = Some(status);
@@ -79,12 +80,13 @@ fn run() -> EspResult {
                     );
                 }
                 AppCommand::UpdateUsage { snapshot } => {
-                    if snapshot.providers.is_empty() {
-                        current_usage = None;
-                    } else {
-                        selected_provider =
-                            selected_provider.min(snapshot.providers.len().saturating_sub(1));
+                    if let Some(provider) =
+                        normalize_selected_provider(&snapshot, selected_provider)
+                    {
+                        selected_provider = provider;
                         current_usage = Some(snapshot);
+                    } else {
+                        current_usage = None;
                     }
                     refresh_scene(
                         &mut renderer,
@@ -110,14 +112,15 @@ fn run() -> EspResult {
             }
         };
         if touching && !was_touching {
-            println!("Touch cycle provider");
-            cycle_provider(&current_usage, &mut selected_provider);
-            refresh_scene(
-                &mut renderer,
-                &current_usage,
-                &current_network_status,
-                selected_provider,
-            );
+            if cycle_provider(&current_usage, &mut selected_provider) {
+                println!("Touch cycle provider");
+                refresh_scene(
+                    &mut renderer,
+                    &current_usage,
+                    &current_network_status,
+                    selected_provider,
+                );
+            }
         }
         was_touching = touching;
 
@@ -153,15 +156,15 @@ fn run_without_display(commands: network::CommandReceiver) -> ! {
     }
 }
 
-fn cycle_provider(current_usage: &Option<UsageSnapshot>, selected_provider: &mut usize) {
+fn cycle_provider(current_usage: &Option<UsageSnapshot>, selected_provider: &mut usize) -> bool {
     let Some(snapshot) = current_usage else {
-        return;
+        return false;
     };
-    if snapshot.providers.is_empty() {
-        return;
+    if let Some(next_provider) = next_provider_index(snapshot, *selected_provider) {
+        *selected_provider = next_provider;
+        return true;
     }
-
-    *selected_provider = (*selected_provider + 1) % snapshot.providers.len();
+    false
 }
 
 fn refresh_scene(

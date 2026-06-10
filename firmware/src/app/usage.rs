@@ -5,11 +5,10 @@ use crate::app::ui::{color, Color, TextAlign, UI_WIDTH};
 use crate::network::{UsageProvider, UsageSnapshot, UsageWindow};
 
 pub fn usage_scene(snapshot: &UsageSnapshot, selected_provider: usize) -> Scene {
-    if snapshot.providers.is_empty() {
+    let Some(selected_provider) = normalize_selected_provider(snapshot, selected_provider) else {
         return waiting_scene();
-    }
+    };
 
-    let selected_provider = selected_provider.min(snapshot.providers.len() - 1);
     let provider = &snapshot.providers[selected_provider];
     let primary = focus_window(provider);
     let primary_percent = primary.map(|window| window.used_percent).unwrap_or(0);
@@ -74,6 +73,44 @@ pub fn usage_scene(snapshot: &UsageSnapshot, selected_provider: usize) -> Scene 
     scene
 }
 
+pub fn normalize_selected_provider(
+    snapshot: &UsageSnapshot,
+    selected_provider: usize,
+) -> Option<usize> {
+    snapshot
+        .providers
+        .get(selected_provider)
+        .filter(|provider| is_drawable_provider(provider))
+        .map(|_| selected_provider)
+        .or_else(|| snapshot.providers.iter().position(is_drawable_provider))
+}
+
+pub fn next_provider_index(snapshot: &UsageSnapshot, selected_provider: usize) -> Option<usize> {
+    let current = normalize_selected_provider(snapshot, selected_provider)?;
+    let mut drawable_indices = snapshot
+        .providers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, provider)| is_drawable_provider(provider).then_some(index));
+
+    let first = drawable_indices.next()?;
+    let second = drawable_indices.next()?;
+    if drawable_indices.next().is_none() {
+        return Some(if current == first { second } else { first });
+    }
+
+    Some(
+        snapshot
+            .providers
+            .iter()
+            .enumerate()
+            .skip(current + 1)
+            .chain(snapshot.providers.iter().enumerate())
+            .find_map(|(index, provider)| is_drawable_provider(provider).then_some(index))
+            .unwrap_or(current),
+    )
+}
+
 fn push_window_bar(
     scene: &mut Scene,
     x: i32,
@@ -126,8 +163,15 @@ fn push_window_bar(
 }
 
 fn push_provider_strip(scene: &mut Scene, snapshot: &UsageSnapshot, selected_provider: usize) {
-    let count = snapshot.providers.len().min(3);
-    if count == 0 {
+    let visible_providers: heapless::Vec<usize, 3> = snapshot
+        .providers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, provider)| is_drawable_provider(provider).then_some(index))
+        .take(3)
+        .collect();
+    let count = visible_providers.len();
+    if count <= 1 {
         return;
     }
 
@@ -135,13 +179,13 @@ fn push_provider_strip(scene: &mut Scene, snapshot: &UsageSnapshot, selected_pro
     let gap = 8;
     let start_x = (UI_WIDTH as i32 - (count as i32 * card_width + (count as i32 - 1) * gap)) / 2;
 
-    for index in 0..count {
-        let provider = &snapshot.providers[index];
-        let x = start_x + index as i32 * (card_width + gap);
+    for (card_index, provider_index) in visible_providers.iter().enumerate() {
+        let provider = &snapshot.providers[*provider_index];
+        let x = start_x + card_index as i32 * (card_width + gap);
         let percent = focus_window(provider)
             .map(|window| window.used_percent)
             .unwrap_or(0);
-        let card_color = if index == selected_provider {
+        let card_color = if *provider_index == selected_provider {
             color::PANEL_DIM
         } else {
             color::PANEL
@@ -173,6 +217,14 @@ fn focus_window(provider: &UsageProvider) -> Option<&UsageWindow> {
         .windows
         .iter()
         .max_by_key(|window| window.used_percent)
+}
+
+fn is_drawable_provider(provider: &UsageProvider) -> bool {
+    !provider.source.eq_ignore_ascii_case("unavailable")
+        && provider
+            .windows
+            .iter()
+            .any(|window| !window.status.eq_ignore_ascii_case("error"))
 }
 
 fn status_label(provider: &UsageProvider, window: Option<&UsageWindow>) -> &'static str {
