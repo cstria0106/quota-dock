@@ -15,6 +15,8 @@ use heapless::String as HeaplessString;
 use serde::{Deserialize, Serialize};
 
 const MAX_HTTP_BODY: usize = 64 * 1024;
+const HTTP_READ_BUFFER: usize = 1024;
+const COMMAND_QUEUE_CAPACITY: usize = 8;
 const NETWORK_STACK_SIZE: usize = 24 * 1024;
 const SERIAL_STACK_SIZE: usize = 24 * 1024;
 const NVS_NAMESPACE: &str = "monitor";
@@ -22,6 +24,7 @@ const NVS_WIFI_SSID: &str = "wifi_ssid";
 const NVS_WIFI_PASSWORD: &str = "wifi_pass";
 
 pub type CommandReceiver = mpsc::Receiver<AppCommand>;
+type CommandSender = mpsc::SyncSender<AppCommand>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -142,7 +145,7 @@ enum CredentialRequest {
 }
 
 pub fn start() -> CommandReceiver {
-    let (command_tx, command_rx) = mpsc::channel();
+    let (command_tx, command_rx) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
     thread::Builder::new()
         .stack_size(NETWORK_STACK_SIZE)
         .spawn(move || {
@@ -154,7 +157,7 @@ pub fn start() -> CommandReceiver {
     command_rx
 }
 
-fn network_task(command_tx: mpsc::Sender<AppCommand>) -> anyhow::Result<()> {
+fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs_partition = EspDefaultNvsPartition::take()?;
@@ -254,7 +257,7 @@ fn network_task(command_tx: mpsc::Sender<AppCommand>) -> anyhow::Result<()> {
 }
 
 fn send_network_status(
-    command_tx: &mpsc::Sender<AppCommand>,
+    command_tx: &CommandSender,
     has_credentials: bool,
     connected: bool,
     ip: Option<String>,
@@ -269,7 +272,7 @@ fn send_network_status(
 }
 
 fn send_current_network_status(
-    command_tx: &mpsc::Sender<AppCommand>,
+    command_tx: &CommandSender,
     state: &Arc<Mutex<NetworkState>>,
     has_credentials: bool,
 ) {
@@ -278,7 +281,7 @@ fn send_current_network_status(
 }
 
 fn start_serial_task(
-    command_tx: mpsc::Sender<AppCommand>,
+    command_tx: CommandSender,
     credential_tx: mpsc::Sender<CredentialRequest>,
     state: Arc<Mutex<NetworkState>>,
 ) {
@@ -322,7 +325,7 @@ fn start_serial_task(
 
 fn handle_serial_line(
     line: &str,
-    command_tx: &mpsc::Sender<AppCommand>,
+    command_tx: &CommandSender,
     credential_tx: &mpsc::Sender<CredentialRequest>,
     state: &Arc<Mutex<NetworkState>>,
 ) -> ApiResponse {
@@ -417,7 +420,7 @@ fn handle_serial_line(
 }
 
 fn start_http_server(
-    command_tx: mpsc::Sender<AppCommand>,
+    command_tx: CommandSender,
     state: Arc<Mutex<NetworkState>>,
 ) -> anyhow::Result<EspHttpServer<'static>> {
     let mut server = EspHttpServer::new(&HttpConfiguration {
@@ -465,7 +468,7 @@ where
     T: Read,
 {
     let mut body = Vec::new();
-    let mut buffer = [0_u8; 64];
+    let mut buffer = [0_u8; HTTP_READ_BUFFER];
 
     loop {
         let len = req

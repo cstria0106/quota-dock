@@ -15,9 +15,12 @@ use app::usage::{
 use drivers::display::{disable_panel, EspResult, Sh8601};
 use drivers::touch::Ft3168;
 use network::{AppCommand, NetworkStatus, UsageSnapshot};
-use time::sleep_ms;
 
 const DISPLAY_ENABLED: bool = true;
+const MAIN_LOOP_SLEEP_MS: u64 = 20;
+const TOUCH_POLL_INTERVAL_MS: u64 = 80;
+const TOUCH_ERROR_LOG_INTERVAL_SECS: u64 = 30;
+const USAGE_COUNTDOWN_REFRESH_SECS: u64 = 60;
 
 fn main() {
     esp_idf_sys::link_patches();
@@ -38,7 +41,7 @@ fn run() -> EspResult {
     }
 
     println!("Initialize QSPI bus and SH8601 panel");
-    let panel = Sh8601::new()?;
+    let mut panel = Sh8601::new()?;
     panel.set_brightness(255)?;
 
     println!("Initialize FT3168 touch controller");
@@ -51,7 +54,7 @@ fn run() -> EspResult {
     println!("Draw initial background");
     let mut renderer = Renderer::new();
     renderer.set_scene(Scene::new());
-    renderer.tick(&panel)?;
+    renderer.tick(&mut panel)?;
 
     let mut current_usage: Option<UsageSnapshot> = None;
     let mut current_usage_received_at: Option<Instant> = None;
@@ -59,7 +62,8 @@ fn run() -> EspResult {
     let mut current_network_status: Option<NetworkStatus> = None;
     let mut selected_provider = 0;
     let mut was_touching = false;
-    let mut touch_error_logged = false;
+    let mut last_touch_error_logged_at: Option<Instant> = None;
+    let mut last_touch_poll = Instant::now();
     let mut last_usage_countdown_refresh = Instant::now();
     loop {
         while let Ok(command) = commands.try_recv() {
@@ -114,36 +118,43 @@ fn run() -> EspResult {
             }
         }
 
-        let touching = match touch.read_point() {
-            Ok(point) => {
-                touch_error_logged = false;
-                point.is_some()
-            }
-            Err(err) => {
-                if !touch_error_logged {
-                    println!("Touch read failed with error {err}");
-                    touch_error_logged = true;
+        if last_touch_poll.elapsed() >= Duration::from_millis(TOUCH_POLL_INTERVAL_MS) {
+            last_touch_poll = Instant::now();
+            let touching = match touch.read_point() {
+                Ok(point) => point.is_some(),
+                Err(err) => {
+                    if last_touch_error_logged_at
+                        .map(|logged_at| {
+                            logged_at.elapsed()
+                                >= Duration::from_secs(TOUCH_ERROR_LOG_INTERVAL_SECS)
+                        })
+                        .unwrap_or(true)
+                    {
+                        println!("Touch read failed with error {err}");
+                        last_touch_error_logged_at = Some(Instant::now());
+                    }
+                    false
                 }
-                false
+            };
+            if touching && !was_touching {
+                if cycle_provider(&current_usage, &mut selected_provider) {
+                    println!("Touch cycle provider");
+                    refresh_scene(
+                        &mut renderer,
+                        &current_usage,
+                        &provider_image_cache,
+                        current_usage_received_at,
+                        &current_network_status,
+                        selected_provider,
+                    );
+                }
             }
-        };
-        if touching && !was_touching {
-            if cycle_provider(&current_usage, &mut selected_provider) {
-                println!("Touch cycle provider");
-                refresh_scene(
-                    &mut renderer,
-                    &current_usage,
-                    &provider_image_cache,
-                    current_usage_received_at,
-                    &current_network_status,
-                    selected_provider,
-                );
-            }
+            was_touching = touching;
         }
-        was_touching = touching;
 
         if current_usage.is_some()
-            && last_usage_countdown_refresh.elapsed() >= Duration::from_secs(1)
+            && last_usage_countdown_refresh.elapsed()
+                >= Duration::from_secs(USAGE_COUNTDOWN_REFRESH_SECS)
         {
             refresh_scene(
                 &mut renderer,
@@ -156,8 +167,8 @@ fn run() -> EspResult {
             last_usage_countdown_refresh = Instant::now();
         }
 
-        renderer.tick(&panel)?;
-        sleep_ms(20);
+        renderer.tick(&mut panel)?;
+        thread::sleep(Duration::from_millis(MAIN_LOOP_SLEEP_MS));
     }
 }
 

@@ -6,12 +6,6 @@ macro_rules! ui_font_chars {
     };
 }
 
-macro_rules! ui_font_chars_for {
-    ($font:ident, $text:literal) => {
-        $text
-    };
-}
-
 macro_rules! ui_text {
     ($font:ident, $text:literal) => {
         TextSpec {
@@ -29,7 +23,6 @@ pub struct TextSpec {
 
 const _: &str =
     ui_font_chars!(" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789%:./-_?");
-const _: &str = ui_font_chars_for!(Galmuri11, "");
 
 pub const SETUP_WIFI: TextSpec = ui_text!(Galmuri9, "Please setup Wi-Fi");
 pub const NO_IP: TextSpec = ui_text!(Galmuri9, "NO IP");

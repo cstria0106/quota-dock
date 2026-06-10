@@ -91,10 +91,6 @@ mod font_9 {
     include!(concat!(env!("OUT_DIR"), "/generated_font_9.rs"));
 }
 
-mod font_11 {
-    include!(concat!(env!("OUT_DIR"), "/generated_font_11.rs"));
-}
-
 pub mod color {
     use super::{rgb565, Color};
 
@@ -116,7 +112,6 @@ pub enum TextAlign {
 pub enum FontFace {
     Galmuri7,
     Galmuri9,
-    Galmuri11,
 }
 
 impl FontFace {
@@ -161,19 +156,6 @@ fn glyph(font: FontFace, ch: char) -> Option<BitmapGlyphRef> {
                 bitmap: &font_9::BITMAP[start..end],
             }
         }),
-        FontFace::Galmuri11 => font_11::glyph(ch).map(|glyph| {
-            let start = glyph.bitmap_offset as usize;
-            let end = start + glyph.bitmap_len as usize;
-            BitmapGlyphRef {
-                width: glyph.width,
-                height: glyph.height,
-                x_offset: glyph.x_offset,
-                y_offset: glyph.y_offset,
-                advance: glyph.advance,
-                bitmap_len: glyph.bitmap_len,
-                bitmap: &font_11::BITMAP[start..end],
-            }
-        }),
     }
 }
 
@@ -181,7 +163,6 @@ fn line_height(font: FontFace) -> i32 {
     match font {
         FontFace::Galmuri7 => font_7::LINE_HEIGHT as i32,
         FontFace::Galmuri9 => font_9::LINE_HEIGHT as i32,
-        FontFace::Galmuri11 => font_11::LINE_HEIGHT as i32,
     }
 }
 
@@ -189,7 +170,6 @@ fn font_size(font: FontFace) -> i32 {
     match font {
         FontFace::Galmuri7 => font_7::FONT_SIZE as i32,
         FontFace::Galmuri9 => font_9::FONT_SIZE as i32,
-        FontFace::Galmuri11 => font_11::FONT_SIZE as i32,
     }
 }
 

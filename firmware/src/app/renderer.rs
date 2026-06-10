@@ -1,11 +1,20 @@
 use std::mem::{discriminant, take};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::app::ui::{
     color, logical_rect_to_physical_area, physical_area_to_logical_rect, Color, FontFace, Rect,
-    TextAlign, UiCanvas, UI_WIDTH,
+    TextAlign, UiCanvas,
 };
 use crate::drivers::display::{EspResult, Sh8601};
+
+const DIFF_UNION_AREA_NUMERATOR: i64 = 4;
+const DIFF_UNION_AREA_DENOMINATOR: i64 = 3;
+const LOADING_DOT_COUNT: i32 = 3;
+const LOADING_DOT_RADIUS: i32 = 8;
+const LOADING_DOT_SPACING: i32 = 34;
+const LOADING_DOT_WAVE_MAX: i32 = 12;
+const LOADING_DOT_BOUNDS_PAD: i32 = 1;
 
 #[derive(Clone, PartialEq)]
 pub struct Scene {
@@ -62,10 +71,21 @@ impl Scene {
 
     fn coalesced_diff_rects(&self, next: &Self, frame: u32) -> Vec<Rect> {
         let rects = self.diff_rects(next, frame);
-        let Some(rect) = rects.into_iter().reduce(Rect::union) else {
+        if rects.len() <= 1 {
+            return rects;
+        }
+
+        let Some(rect) = rects.iter().copied().reduce(Rect::union) else {
             return Vec::new();
         };
-        vec![rect]
+        let separate_area = rects.iter().map(|rect| rect_area(*rect)).sum::<i64>();
+        if rect_area(rect) * DIFF_UNION_AREA_DENOMINATOR
+            <= separate_area * DIFF_UNION_AREA_NUMERATOR
+        {
+            vec![rect]
+        } else {
+            rects
+        }
     }
 
     fn has_same_shape(&self, next: &Self) -> bool {
@@ -156,8 +176,8 @@ impl UiObject {
         pixel: i32,
         width: i32,
         height: i32,
-        cells: Vec<u8>,
-        palette: Vec<Color>,
+        cells: Arc<[u8]>,
+        palette: Arc<[Color]>,
     ) -> Self {
         Self::PixelArt(PixelArtObject {
             bounds,
@@ -286,7 +306,7 @@ pub struct RoundedMeterFillObject {
     track_color: Color,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct PixelArtObject {
     bounds: Rect,
     draw_x: i32,
@@ -294,8 +314,21 @@ pub struct PixelArtObject {
     pixel: i32,
     width: i32,
     height: i32,
-    cells: Vec<u8>,
-    palette: Vec<Color>,
+    cells: Arc<[u8]>,
+    palette: Arc<[Color]>,
+}
+
+impl PartialEq for PixelArtObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.bounds == other.bounds
+            && self.draw_x == other.draw_x
+            && self.draw_y == other.draw_y
+            && self.pixel == other.pixel
+            && self.width == other.width
+            && self.height == other.height
+            && Arc::ptr_eq(&self.cells, &other.cells)
+            && Arc::ptr_eq(&self.palette, &other.palette)
+    }
 }
 
 impl PixelArtObject {
@@ -306,19 +339,28 @@ impl PixelArtObject {
         }
         let height = self.height.max(0) as usize;
         for (row_index, row) in self.cells.chunks(width).take(height).enumerate() {
-            for (column_index, cell) in row.iter().enumerate() {
-                if *cell == 0 {
+            let mut column_index = 0;
+            while column_index < row.len() {
+                let cell = row[column_index];
+                if cell == 0 {
+                    column_index += 1;
                     continue;
                 }
-                if let Some(color) = self.palette.get((*cell - 1) as usize) {
+                let mut run_end = column_index + 1;
+                while run_end < row.len() && row[run_end] == cell {
+                    run_end += 1;
+                }
+
+                if let Some(color) = self.palette.get((cell - 1) as usize) {
                     ui.rect(
                         self.draw_x + column_index as i32 * self.pixel,
                         self.draw_y + row_index as i32 * self.pixel,
-                        self.pixel,
+                        (run_end - column_index) as i32 * self.pixel,
                         self.pixel,
                         *color,
                     );
                 }
+                column_index = run_end;
             }
         }
     }
@@ -334,20 +376,29 @@ pub struct LoadingDotsObject {
 
 impl LoadingDotsObject {
     fn draw(&self, ui: &mut UiCanvas<'_>, frame: u32) {
-        for index in 0..3 {
+        for index in 0..LOADING_DOT_COUNT {
             let (x, y) = self.dot_position(frame, index);
-            ui.circle(x, y, 8, self.color);
+            ui.circle(x, y, LOADING_DOT_RADIUS, self.color);
         }
     }
 
     fn bounds(&self, _frame: u32) -> Rect {
-        Rect::new(0, self.base_y - 25, UI_WIDTH as i32, 50).clamp_to_screen()
+        let x = self.base_x - LOADING_DOT_RADIUS - LOADING_DOT_BOUNDS_PAD;
+        let y = self.base_y - LOADING_DOT_WAVE_MAX - LOADING_DOT_RADIUS - LOADING_DOT_BOUNDS_PAD;
+        let w = LOADING_DOT_SPACING * (LOADING_DOT_COUNT - 1)
+            + LOADING_DOT_RADIUS * 2
+            + LOADING_DOT_BOUNDS_PAD * 2;
+        let h = (LOADING_DOT_WAVE_MAX + LOADING_DOT_RADIUS) * 2 + LOADING_DOT_BOUNDS_PAD * 2;
+        Rect::new(x, y, w, h).clamp_to_screen()
     }
 
     fn dot_position(&self, frame: u32, index: i32) -> (i32, i32) {
         let wave_offsets = [0, -5, -9, -12, -9, -5, 0, 5, 9, 12, 9, 5];
         let phase = (frame as usize + index as usize * 3) % wave_offsets.len();
-        (self.base_x + index * 34, self.base_y + wave_offsets[phase])
+        (
+            self.base_x + index * LOADING_DOT_SPACING,
+            self.base_y + wave_offsets[phase],
+        )
     }
 }
 
@@ -375,16 +426,17 @@ impl Renderer {
             return;
         }
 
-        self.dirty = match &self.rendered_scene {
+        let dirty = match &self.rendered_scene {
             Some(rendered_scene) => rendered_scene.coalesced_diff_rects(&scene, self.frame),
             None => vec![Rect::full()],
         };
+        self.dirty = dirty;
         self.scene = Some(scene);
         self.frame = 0;
         self.last_frame = Instant::now();
     }
 
-    pub fn tick(&mut self, panel: &Sh8601) -> EspResult {
+    pub fn tick(&mut self, panel: &mut Sh8601) -> EspResult {
         let animated_dirty = {
             let Some(scene) = self.scene.as_ref() else {
                 return Ok(());
@@ -434,7 +486,7 @@ impl Renderer {
         self.dirty.push(rect);
     }
 
-    fn draw(&self, panel: &Sh8601, scene: &Scene, dirty: Rect) -> EspResult {
+    fn draw(&self, panel: &mut Sh8601, scene: &Scene, dirty: Rect) -> EspResult {
         let Some(area) = logical_rect_to_physical_area(dirty) else {
             return Ok(());
         };
@@ -452,4 +504,8 @@ impl Renderer {
             },
         )
     }
+}
+
+fn rect_area(rect: Rect) -> i64 {
+    i64::from(rect.w.max(0)) * i64::from(rect.h.max(0))
 }

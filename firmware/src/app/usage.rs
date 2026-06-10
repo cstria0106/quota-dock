@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use crate::app::renderer::{Scene, UiObject};
 use crate::app::status::waiting_scene;
 use crate::app::ui::{
     color, rgb565, Color, FontFace, Rect, TextAlign, UiCanvas, UI_HEIGHT, UI_WIDTH,
 };
 use crate::network::{UsagePixelArt, UsageProvider, UsageSnapshot, UsageWindow};
+use heapless::Vec as FixedVec;
 
 const SCREEN_PAD_X: i32 = 20;
 const PANEL_GAP: i32 = 8;
@@ -25,7 +28,7 @@ const RESET_SCALE: i32 = 2;
 const PRIMARY_CONTENT_MIN_H: i32 = 96;
 const PRIMARY_ART_SIZE: i32 = 96;
 const MAX_PROVIDER_IMAGE_SIDE: usize = PRIMARY_ART_SIZE as usize;
-const MAX_CACHED_PROVIDER_IMAGES: usize = 6;
+const MAX_CACHED_PROVIDER_IMAGES: usize = 3;
 
 #[derive(Default)]
 pub struct ProviderImageCache {
@@ -42,8 +45,8 @@ struct CachedProviderImage {
 struct PackedPixelArt {
     width: i32,
     height: i32,
-    cells: Vec<u8>,
-    palette: Vec<Color>,
+    cells: Arc<[u8]>,
+    palette: Arc<[Color]>,
 }
 
 pub fn cache_provider_images(snapshot: &mut UsageSnapshot, cache: &mut ProviderImageCache) {
@@ -95,6 +98,7 @@ impl PackedPixelArt {
         if palette.is_empty() {
             return None;
         }
+        let palette_len = palette.len();
 
         let width = art.rows.iter().map(|row| row.chars().count()).max()?;
         let height = art.rows.len();
@@ -110,7 +114,7 @@ impl PackedPixelArt {
         for row in &art.rows {
             let mut row_width = 0;
             for cell in row.chars() {
-                cells.push(palette_index(cell, palette.len()).unwrap_or_default());
+                cells.push(palette_index(cell, palette_len).unwrap_or_default());
                 row_width += 1;
             }
             if row_width > width {
@@ -122,8 +126,8 @@ impl PackedPixelArt {
         Some(Self {
             width: width as i32,
             height: height as i32,
-            cells,
-            palette,
+            cells: cells.into(),
+            palette: palette.into(),
         })
     }
 }
@@ -160,7 +164,7 @@ pub fn usage_scene(
     push_usage_layout(
         &mut scene,
         pixel_art,
-        &windows,
+        windows.as_slice(),
         &theme,
         snapshot
             .updated_at_unix
@@ -474,13 +478,17 @@ fn push_pixel_art(scene: &mut Scene, art: &PackedPixelArt, x: i32, y: i32, size:
     true
 }
 
-fn drawable_windows(provider: &UsageProvider) -> Vec<&UsageWindow> {
-    provider
-        .windows
-        .iter()
-        .filter(|window| !window.status.eq_ignore_ascii_case("error"))
-        .take(3)
-        .collect()
+fn drawable_windows(provider: &UsageProvider) -> FixedVec<&UsageWindow, 3> {
+    let mut windows = FixedVec::new();
+    for window in &provider.windows {
+        if window.status.eq_ignore_ascii_case("error") {
+            continue;
+        }
+        if windows.push(window).is_err() {
+            break;
+        }
+    }
+    windows
 }
 
 fn is_drawable_provider(provider: &UsageProvider) -> bool {

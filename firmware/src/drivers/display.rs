@@ -5,7 +5,7 @@
 //! outside this driver and feed pixel rows through `Sh8601::draw_rows`.
 
 use core::ffi::{c_int, c_void};
-use core::mem::MaybeUninit;
+use core::mem::{size_of, MaybeUninit};
 use core::ptr::{self, NonNull};
 use core::slice;
 
@@ -27,7 +27,8 @@ const LCD_RST: c_int = 21;
 pub const LCD_H_RES: usize = 280;
 pub const LCD_V_RES: usize = 456;
 const LCD_X_OFFSET: i32 = 0x14;
-const ROWS_PER_CHUNK: usize = 64;
+const PREFERRED_ROWS_PER_CHUNK: usize = 128;
+const FALLBACK_ROWS_PER_CHUNK: usize = 64;
 
 const ESP_OK: EspErr = 0;
 const ESP_ERR_NO_MEM: EspErr = 0x101;
@@ -110,6 +111,7 @@ extern "C" {
 
 pub struct Sh8601 {
     io: PanelIoHandle,
+    draw_buffer: DmaPixelBuffer,
 }
 
 impl Sh8601 {
@@ -119,7 +121,8 @@ impl Sh8601 {
                 LCD_DATA0, LCD_DATA1, LCD_PCLK, LCD_DATA2, LCD_DATA3, -1, -1, -1, -1,
             ],
             data_io_default_level: false,
-            max_transfer_sz: (LCD_H_RES * LCD_V_RES * LCD_BIT_PER_PIXEL / 8) as c_int,
+            max_transfer_sz: (LCD_H_RES * PREFERRED_ROWS_PER_CHUNK * LCD_BIT_PER_PIXEL / 8)
+                as c_int,
             flags: 0,
             isr_cpu_id: 0,
             intr_flags: 0,
@@ -131,7 +134,7 @@ impl Sh8601 {
             dc_gpio_num: -1,
             spi_mode: 0,
             pclk_hz: 40 * 1000 * 1000,
-            trans_queue_depth: 10,
+            trans_queue_depth: 3,
             on_color_trans_done: None,
             user_ctx: ptr::null_mut(),
             lcd_cmd_bits: 32,
@@ -145,6 +148,7 @@ impl Sh8601 {
 
         let panel = Self {
             io: unsafe { io.assume_init() },
+            draw_buffer: DmaPixelBuffer::new_largest()?,
         };
         panel.reset()?;
         panel.init()?;
@@ -158,7 +162,7 @@ impl Sh8601 {
     }
 
     pub fn draw_area(
-        &self,
+        &mut self,
         x: usize,
         y: usize,
         width: usize,
@@ -177,17 +181,23 @@ impl Sh8601 {
             return Ok(());
         }
 
-        let mut buffer = DmaPixelBuffer::new(width * ROWS_PER_CHUNK)?;
-        for row_start in (y..y + height).step_by(ROWS_PER_CHUNK) {
-            let rows = ROWS_PER_CHUNK.min(y + height - row_start);
+        let rows_per_chunk = self.draw_buffer.rows_for_width(width).min(height);
+        for row_start in (y..y + height).step_by(rows_per_chunk) {
+            let rows = rows_per_chunk.min(y + height - row_start);
             let len = width * rows;
-            fill_rows(&mut buffer.as_mut_slice()[..len], x, row_start, width, rows);
+            fill_rows(
+                &mut self.draw_buffer.as_mut_slice()[..len],
+                x,
+                row_start,
+                width,
+                rows,
+            );
             self.draw_bitmap_area(
                 x as i32,
                 row_start as i32,
                 width as i32,
                 rows as i32,
-                buffer.as_slice()[..len].as_ptr(),
+                self.draw_buffer.as_ptr(),
             )?;
         }
 
@@ -325,6 +335,11 @@ struct DmaPixelBuffer {
 }
 
 impl DmaPixelBuffer {
+    fn new_largest() -> EspResult<Self> {
+        Self::new(LCD_H_RES * PREFERRED_ROWS_PER_CHUNK)
+            .or_else(|_| Self::new(LCD_H_RES * FALLBACK_ROWS_PER_CHUNK))
+    }
+
     fn new(len: usize) -> EspResult<Self> {
         let pixels =
             unsafe { heap_caps_malloc(len * size_of::<u16>(), MALLOC_CAP_DMA) }.cast::<u16>();
@@ -335,8 +350,12 @@ impl DmaPixelBuffer {
         Ok(Self { pixels, len })
     }
 
-    fn as_slice(&self) -> &[u16] {
-        unsafe { slice::from_raw_parts(self.pixels.as_ptr(), self.len) }
+    fn rows_for_width(&self, width: usize) -> usize {
+        (self.len / width.max(1)).max(1)
+    }
+
+    fn as_ptr(&self) -> *const u16 {
+        self.pixels.as_ptr()
     }
 
     fn as_mut_slice(&mut self) -> &mut [u16] {

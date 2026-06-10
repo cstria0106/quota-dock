@@ -18,12 +18,6 @@ const FONTS: &[(&str, &str, f32, &str)] = &[
         10.0,
         "generated_font_9.rs",
     ),
-    (
-        "Galmuri11",
-        "assets/fonts/Galmuri11.ttf",
-        12.0,
-        "generated_font_11.rs",
-    ),
 ];
 const TEXT_SOURCE: &str = "src/app/text.rs";
 
