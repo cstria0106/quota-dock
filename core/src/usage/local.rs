@@ -14,6 +14,7 @@ const MAX_JSONL_FILES: usize = 4_000;
 pub(super) fn estimate_provider(
     id: &str,
     label: &str,
+    theme_color: &str,
     roots: Vec<PathBuf>,
     live_error: String,
 ) -> UsageProvider {
@@ -22,6 +23,7 @@ pub(super) fn estimate_provider(
         return UsageProvider {
             id: id.to_string(),
             label: label.to_string(),
+            theme_color: Some(theme_color.to_string()),
             source: "unavailable".to_string(),
             account: None,
             plan: Some(short_error(&live_error)),
@@ -35,6 +37,7 @@ pub(super) fn estimate_provider(
     UsageProvider {
         id: id.to_string(),
         label: label.to_string(),
+        theme_color: Some(theme_color.to_string()),
         source: "local-estimate".to_string(),
         account: None,
         plan: Some(format!("{} files", totals.files)),

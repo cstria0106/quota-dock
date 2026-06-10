@@ -10,6 +10,7 @@ use super::{
 };
 
 pub const PROVIDER_ID: &str = "CODEX";
+const THEME_COLOR: &str = "#3B82F6";
 
 pub struct CodexUsageCollector;
 
@@ -21,7 +22,9 @@ impl UsageCollector for CodexUsageCollector {
     fn collect(&self) -> UsageProvider {
         match fetch_codex_oauth_provider() {
             Ok(provider) => provider,
-            Err(err) => local::estimate_provider(PROVIDER_ID, "CODEX", codex_log_roots(), err),
+            Err(err) => {
+                local::estimate_provider(PROVIDER_ID, "CODEX", THEME_COLOR, codex_log_roots(), err)
+            }
         }
     }
 }
@@ -100,6 +103,7 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
     Ok(UsageProvider {
         id: PROVIDER_ID.to_string(),
         label: "CODEX".to_string(),
+        theme_color: Some(THEME_COLOR.to_string()),
         source: "oauth".to_string(),
         account: None,
         plan: usage.plan_type.map(|plan| plan.to_ascii_uppercase()),

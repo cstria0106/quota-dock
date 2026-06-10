@@ -38,6 +38,7 @@ pub struct UsageSnapshot {
 pub struct UsageProvider {
     pub id: String,
     pub label: String,
+    pub theme_color: Option<String>,
     pub source: String,
     pub account: Option<String>,
     pub plan: Option<String>,
@@ -178,6 +179,7 @@ mod tests {
             UsageProvider {
                 id: self.id.to_string(),
                 label: self.id.to_string(),
+                theme_color: None,
                 source: "test".to_string(),
                 account: None,
                 plan: None,

@@ -50,6 +50,8 @@ pub struct UsageSnapshot {
 pub struct UsageProvider {
     pub id: String,
     pub label: String,
+    #[serde(default)]
+    pub theme_color: Option<String>,
     pub source: String,
     pub account: Option<String>,
     pub plan: Option<String>,

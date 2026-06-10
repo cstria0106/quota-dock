@@ -11,6 +11,7 @@ use super::{
 };
 
 pub const PROVIDER_ID: &str = "CLAUDE";
+const THEME_COLOR: &str = "#D97757";
 
 pub struct ClaudeUsageCollector;
 
@@ -22,7 +23,13 @@ impl UsageCollector for ClaudeUsageCollector {
     fn collect(&self) -> UsageProvider {
         match fetch_claude_oauth_provider() {
             Ok(provider) => provider,
-            Err(err) => local::estimate_provider(PROVIDER_ID, "CLAUDE", claude_log_roots(), err),
+            Err(err) => local::estimate_provider(
+                PROVIDER_ID,
+                "CLAUDE",
+                THEME_COLOR,
+                claude_log_roots(),
+                err,
+            ),
         }
     }
 }
@@ -91,6 +98,7 @@ fn fetch_claude_oauth_provider() -> Result<UsageProvider, String> {
     Ok(UsageProvider {
         id: PROVIDER_ID.to_string(),
         label: "CLAUDE".to_string(),
+        theme_color: Some(THEME_COLOR.to_string()),
         source: "oauth".to_string(),
         account: None,
         plan: oauth

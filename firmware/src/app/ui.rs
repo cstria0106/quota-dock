@@ -100,7 +100,6 @@ pub mod color {
     pub const TEAL: Color = rgb565(54, 178, 202);
     pub const AMBER: Color = rgb565(248, 190, 76);
     pub const CORAL: Color = rgb565(241, 93, 86);
-    pub const LAVENDER: Color = rgb565(166, 142, 245);
     pub const SHINE: Color = rgb565(255, 245, 202);
 }
 
@@ -346,7 +345,7 @@ fn physical_to_logical(physical_x: usize, physical_y: usize) -> (usize, usize) {
     }
 }
 
-const fn rgb565(red: u8, green: u8, blue: u8) -> Color {
+pub const fn rgb565(red: u8, green: u8, blue: u8) -> Color {
     let value = (((red as u16) & 0xF8) << 8) | (((green as u16) & 0xFC) << 3) | (blue as u16 >> 3);
     ((value & 0x00FF) << 8) | (value >> 8)
 }

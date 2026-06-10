@@ -1,7 +1,7 @@
 use crate::app::renderer::{Scene, UiObject};
 use crate::app::status::waiting_scene;
 use crate::app::text;
-use crate::app::ui::{color, Color, TextAlign, UI_WIDTH};
+use crate::app::ui::{color, rgb565, Color, TextAlign, UI_WIDTH};
 use crate::network::{UsageProvider, UsageSnapshot, UsageWindow};
 
 pub fn usage_scene(snapshot: &UsageSnapshot, selected_provider: usize) -> Scene {
@@ -12,7 +12,7 @@ pub fn usage_scene(snapshot: &UsageSnapshot, selected_provider: usize) -> Scene 
     let provider = &snapshot.providers[selected_provider];
     let primary = focus_window(provider);
     let primary_percent = primary.map(|window| window.used_percent).unwrap_or(0);
-    let accent = color_for(primary_percent);
+    let accent = provider_color(provider, primary_percent);
     let percent_text = format!("{primary_percent}%");
     let source = status_label(provider, primary);
     let width = UI_WIDTH as i32;
@@ -48,26 +48,8 @@ pub fn usage_scene(snapshot: &UsageSnapshot, selected_provider: usize) -> Scene 
         TextAlign::Center,
     ));
 
-    push_window_bar(
-        &mut scene,
-        216,
-        92,
-        text::WINDOW_5H,
-        provider,
-        "5h",
-        color::TEAL,
-        210,
-    );
-    push_window_bar(
-        &mut scene,
-        216,
-        164,
-        text::WINDOW_7D,
-        provider,
-        "7d",
-        color::LAVENDER,
-        210,
-    );
+    push_window_bar(&mut scene, 216, 92, text::WINDOW_5H, provider, "5h", 210);
+    push_window_bar(&mut scene, 216, 164, text::WINDOW_7D, provider, "7d", 210);
 
     push_provider_strip(&mut scene, snapshot, selected_provider);
     scene
@@ -118,7 +100,6 @@ fn push_window_bar(
     label: &str,
     provider: &UsageProvider,
     kind: &str,
-    fallback: Color,
     bar_width: i32,
 ) {
     let window = provider
@@ -126,11 +107,7 @@ fn push_window_bar(
         .iter()
         .find(|window| window.kind.eq_ignore_ascii_case(kind));
     let percent = window.map(|window| window.used_percent).unwrap_or(0);
-    let fill_color = if percent == 0 {
-        fallback
-    } else {
-        color_for(percent)
-    };
+    let fill_color = provider_color(provider, percent);
     let percent_text = format!("{percent}%");
 
     scene.push(UiObject::text(
@@ -207,7 +184,7 @@ fn push_provider_strip(scene: &mut Scene, snapshot: &UsageSnapshot, selected_pro
             card_width - 14,
             6,
             percent,
-            color_for(percent),
+            provider_color(provider, percent),
         ));
     }
 }
@@ -240,7 +217,27 @@ fn status_label(provider: &UsageProvider, window: Option<&UsageWindow>) -> &'sta
     ""
 }
 
-fn color_for(percent: u8) -> Color {
+fn provider_color(provider: &UsageProvider, percent: u8) -> Color {
+    provider
+        .theme_color
+        .as_deref()
+        .and_then(parse_hex_color)
+        .unwrap_or_else(|| usage_color_for(percent))
+}
+
+fn parse_hex_color(value: &str) -> Option<Color> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if hex.len() != 6 {
+        return None;
+    }
+
+    let red = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let green = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let blue = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(rgb565(red, green, blue))
+}
+
+fn usage_color_for(percent: u8) -> Color {
     match percent {
         0..=54 => color::MINT,
         55..=79 => color::AMBER,
