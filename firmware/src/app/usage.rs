@@ -1,106 +1,8 @@
 use crate::app::text;
-use crate::app::ui::{color, Color, Mood, TextAlign, UiCanvas};
-use crate::drivers::display::{EspResult, Sh8601, LCD_H_RES};
-use crate::network::{NetworkStatus, UsageProvider, UsageSnapshot, UsageWindow};
-
-pub fn draw_waiting(panel: &Sh8601) -> EspResult {
-    panel.draw_rows(|output, y, rows| {
-        let mut ui = UiCanvas::new(output, y, rows);
-        ui.dotted_background();
-        ui.text(
-            0,
-            24,
-            LCD_H_RES as i32,
-            text::APP_TITLE,
-            1,
-            color::TEXT,
-            TextAlign::Center,
-        );
-        ui.face(LCD_H_RES as i32 / 2, 152, 54, color::MINT, Mood::Calm);
-        ui.text(
-            0,
-            246,
-            LCD_H_RES as i32,
-            text::WAITING,
-            2,
-            color::TEXT,
-            TextAlign::Center,
-        );
-        ui.text(
-            0,
-            304,
-            LCD_H_RES as i32,
-            text::PUSH_USAGE_FROM_CLI,
-            1,
-            color::MUTED,
-            TextAlign::Center,
-        );
-        ui.meter_shell(30, 350, 220, 26, color::PANEL_DIM);
-    })
-}
-
-pub fn draw_network_status(panel: &Sh8601, status: &NetworkStatus) -> EspResult {
-    let (title, detail, accent, mood) = if !status.has_credentials {
-        (
-            text::SETUP_WIFI,
-            text::RUN_CLI_PROVISION,
-            color::AMBER,
-            Mood::Busy,
-        )
-    } else if status.connected {
-        (
-            text::WIFI_READY,
-            status.ip.as_deref().unwrap_or(text::NO_IP),
-            color::MINT,
-            Mood::Calm,
-        )
-    } else {
-        (text::WIFI_WAIT, text::CONNECTING, color::TEAL, Mood::Busy)
-    };
-
-    panel.draw_rows(|output, y, rows| {
-        let mut ui = UiCanvas::new(output, y, rows);
-        ui.dotted_background();
-        ui.text(
-            0,
-            24,
-            LCD_H_RES as i32,
-            text::APP_TITLE,
-            1,
-            color::TEXT,
-            TextAlign::Center,
-        );
-        ui.face(LCD_H_RES as i32 / 2, 142, 50, accent, mood);
-        ui.text(
-            0,
-            234,
-            LCD_H_RES as i32,
-            title,
-            2,
-            color::TEXT,
-            TextAlign::Center,
-        );
-        ui.text(
-            0,
-            298,
-            LCD_H_RES as i32,
-            detail,
-            1,
-            color::MUTED,
-            TextAlign::Center,
-        );
-        ui.text(
-            0,
-            340,
-            LCD_H_RES as i32,
-            text::WAITING_FOR_QUOTA,
-            1,
-            color::MUTED,
-            TextAlign::Center,
-        );
-        ui.meter_shell(30, 386, 220, 26, color::PANEL_DIM);
-    })
-}
+use crate::app::status::draw_waiting;
+use crate::app::ui::{color, Color, TextAlign, UiCanvas};
+use crate::drivers::display::{EspResult, Sh8601};
+use crate::network::{UsageProvider, UsageSnapshot, UsageWindow};
 
 pub fn draw_usage_snapshot(
     panel: &Sh8601,
@@ -115,7 +17,6 @@ pub fn draw_usage_snapshot(
     let provider = &snapshot.providers[selected_provider];
     let primary = focus_window(provider);
     let primary_percent = primary.map(|window| window.used_percent).unwrap_or(0);
-    let mood = mood_for(primary_percent);
     let accent = color_for(primary_percent);
     let percent_text = format!("{primary_percent}%");
     let source = status_label(provider, primary);
@@ -123,75 +24,52 @@ pub fn draw_usage_snapshot(
     panel.draw_rows(|output, y, rows| {
         let mut ui = UiCanvas::new(output, y, rows);
         ui.dotted_background();
-        ui.text(
-            28,
-            18,
-            220,
-            text::APP_TITLE,
-            1,
-            color::TEXT,
-            TextAlign::Left,
-        );
+        let width = ui.width();
         ui.text(
             24,
-            54,
-            180,
+            18,
+            260,
             provider.label.as_str(),
             1,
             accent,
             TextAlign::Left,
         );
-        ui.text(208, 58, 46, source, 1, color::MUTED, TextAlign::Left);
+        if !source.is_empty() {
+            ui.text(width - 62, 20, 38, source, 1, color::MUTED, TextAlign::Right);
+        }
 
-        ui.face(70, 139, 43, accent, mood);
         ui.text(
-            122,
-            110,
-            130,
+            24,
+            96,
+            164,
             percent_text.as_str(),
             3,
             color::TEXT,
             TextAlign::Center,
         );
-        ui.text(
-            122,
-            158,
-            130,
-            text::USED,
-            1,
-            color::MUTED,
-            TextAlign::Center,
-        );
 
         draw_window_bar(
             &mut ui,
-            26,
-            222,
+            216,
+            92,
             text::WINDOW_5H,
             provider,
             "5h",
             color::TEAL,
+            210,
         );
         draw_window_bar(
             &mut ui,
-            26,
-            286,
+            216,
+            164,
             text::WINDOW_7D,
             provider,
             "7d",
             color::LAVENDER,
+            210,
         );
 
         draw_provider_strip(&mut ui, snapshot, selected_provider);
-        ui.text(
-            38,
-            424,
-            220,
-            snapshot.updated_at.as_str(),
-            1,
-            color::MUTED,
-            TextAlign::Left,
-        );
     })
 }
 
@@ -203,6 +81,7 @@ fn draw_window_bar(
     provider: &UsageProvider,
     kind: &str,
     fallback: Color,
+    bar_width: i32,
 ) {
     let window = provider
         .windows
@@ -218,7 +97,7 @@ fn draw_window_bar(
 
     ui.text(x, y - 25, 56, label, 1, color::TEXT, TextAlign::Left);
     ui.text(
-        x + 172,
+        x + bar_width - 56,
         y - 22,
         56,
         percent_text.as_str(),
@@ -226,8 +105,8 @@ fn draw_window_bar(
         color::TEXT,
         TextAlign::Right,
     );
-    ui.meter_shell(x, y, 228, 29, color::PANEL);
-    ui.meter_fill(x + 4, y + 4, 220, 21, percent, fill_color);
+    ui.meter_shell(x, y, bar_width, 29, color::PANEL);
+    ui.meter_fill(x + 4, y + 4, bar_width - 8, 21, percent, fill_color);
 }
 
 fn draw_provider_strip(ui: &mut UiCanvas<'_>, snapshot: &UsageSnapshot, selected_provider: usize) {
@@ -236,9 +115,10 @@ fn draw_provider_strip(ui: &mut UiCanvas<'_>, snapshot: &UsageSnapshot, selected
         return;
     }
 
-    let card_width = 74;
+    let card_width = 86;
     let gap = 8;
-    let start_x = (LCD_H_RES as i32 - (count as i32 * card_width + (count as i32 - 1) * gap)) / 2;
+    let start_x =
+        (ui.width() - (count as i32 * card_width + (count as i32 - 1) * gap)) / 2;
 
     for index in 0..count {
         let provider = &snapshot.providers[index];
@@ -252,17 +132,17 @@ fn draw_provider_strip(ui: &mut UiCanvas<'_>, snapshot: &UsageSnapshot, selected
             color::PANEL
         };
 
-        ui.rect(x, 356, card_width, 48, card_color);
+        ui.rect(x, 222, card_width, 42, card_color);
         ui.text(
             x + 7,
-            365,
+            230,
             card_width - 14,
             provider.id.as_str(),
             1,
             color::TEXT,
             TextAlign::Center,
         );
-        ui.meter_fill(x + 7, 388, card_width - 14, 7, percent, color_for(percent));
+        ui.meter_fill(x + 7, 252, card_width - 14, 6, percent, color_for(percent));
     }
 }
 
@@ -283,7 +163,7 @@ fn status_label(provider: &UsageProvider, window: Option<&UsageWindow>) -> &'sta
     if provider.source.eq_ignore_ascii_case("local-estimate") {
         return text::STATUS_EST;
     }
-    text::STATUS_LIVE
+    ""
 }
 
 fn color_for(percent: u8) -> Color {
@@ -292,13 +172,5 @@ fn color_for(percent: u8) -> Color {
         55..=79 => color::AMBER,
         80..=100 => color::CORAL,
         _ => color::TEAL,
-    }
-}
-
-fn mood_for(percent: u8) -> Mood {
-    match percent {
-        0..=54 => Mood::Calm,
-        55..=79 => Mood::Busy,
-        _ => Mood::Hot,
     }
 }

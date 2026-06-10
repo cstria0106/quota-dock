@@ -1,6 +1,18 @@
-use crate::drivers::display::LCD_H_RES;
+use crate::drivers::display::{LCD_H_RES as PHYSICAL_H_RES, LCD_V_RES as PHYSICAL_V_RES};
 
 pub type Color = u16;
+
+const UI_LANDSCAPE_CLOCKWISE: bool = true;
+pub const UI_WIDTH: usize = if UI_LANDSCAPE_CLOCKWISE {
+    PHYSICAL_V_RES
+} else {
+    PHYSICAL_H_RES
+};
+pub const UI_HEIGHT: usize = if UI_LANDSCAPE_CLOCKWISE {
+    PHYSICAL_H_RES
+} else {
+    PHYSICAL_V_RES
+};
 
 mod font {
     include!(concat!(env!("OUT_DIR"), "/generated_font.rs"));
@@ -20,9 +32,7 @@ pub mod color {
     pub const AMBER: Color = rgb565(248, 190, 76);
     pub const CORAL: Color = rgb565(241, 93, 86);
     pub const LAVENDER: Color = rgb565(166, 142, 245);
-    pub const INK: Color = rgb565(35, 31, 32);
     pub const SHINE: Color = rgb565(255, 245, 202);
-    pub const SWEAT: Color = rgb565(128, 225, 255);
 }
 
 #[derive(Clone, Copy)]
@@ -49,12 +59,22 @@ impl<'a> UiCanvas<'a> {
 
     pub fn dotted_background(&mut self) {
         for row in 0..self.rows {
-            let y = self.y_start + row;
-            for x in 0..LCD_H_RES {
+            let physical_y = self.y_start + row;
+            for physical_x in 0..PHYSICAL_H_RES {
+                let (x, y) = physical_to_logical(physical_x, physical_y);
                 let dot = (x + y) % 18 == 0;
-                self.output[row * LCD_H_RES + x] = if dot { color::BG_DOT } else { color::BG };
+                self.output[row * PHYSICAL_H_RES + physical_x] =
+                    if dot { color::BG_DOT } else { color::BG };
             }
         }
+    }
+
+    pub fn width(&self) -> i32 {
+        UI_WIDTH as i32
+    }
+
+    pub fn height(&self) -> i32 {
+        UI_HEIGHT as i32
     }
 
     pub fn text(
@@ -86,7 +106,7 @@ impl<'a> UiCanvas<'a> {
         for ch in text.chars() {
             self.glyph(cursor, y, ch, scale, color);
             cursor += Self::glyph_advance(ch) * scale;
-            if cursor > LCD_H_RES as i32 - 2 {
+            if cursor > UI_WIDTH as i32 - 2 {
                 break;
             }
         }
@@ -149,64 +169,70 @@ impl<'a> UiCanvas<'a> {
         }
     }
 
-    pub fn face(&mut self, cx: i32, cy: i32, radius: i32, fill_color: Color, mood: Mood) {
-        self.circle(cx, cy, radius, fill_color);
-        self.circle(cx - 18, cy - 9, 6, color::INK);
-        self.circle(cx + 18, cy - 9, 6, color::INK);
-
-        match mood {
-            Mood::Calm => {
-                self.rect(cx - 18, cy + 16, 36, 5, color::INK);
-                self.rect(cx - 12, cy + 21, 24, 5, color::INK);
-            }
-            Mood::Busy => {
-                self.rect(cx - 22, cy + 17, 44, 5, color::INK);
-            }
-            Mood::Hot => {
-                self.rect(cx - 19, cy + 16, 38, 7, color::INK);
-                self.circle(cx + 34, cy - 28, 7, color::SWEAT);
-            }
-        }
-    }
-
     pub fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
-        let x0 = x.max(0) as usize;
-        let y0 = y.max(self.y_start as i32) as usize;
-        let x1 = (x + w).min(LCD_H_RES as i32).max(0) as usize;
-        let y1 = (y + h).min((self.y_start + self.rows) as i32).max(0) as usize;
+        let x0 = x.max(0);
+        let y0 = y.max(0);
+        let x1 = (x + w).min(UI_WIDTH as i32).max(0);
+        let y1 = (y + h).min(UI_HEIGHT as i32).max(0);
         if x0 >= x1 || y0 >= y1 {
             return;
         }
 
         for py in y0..y1 {
-            let row = py - self.y_start;
             for px in x0..x1 {
-                self.output[row * LCD_H_RES + px] = color;
+                self.set_pixel(px, py, color);
             }
         }
     }
 
     pub fn circle(&mut self, cx: i32, cy: i32, radius: i32, color: Color) {
         let r2 = radius * radius;
-        let y0 = (cy - radius).max(self.y_start as i32);
-        let y1 = (cy + radius).min((self.y_start + self.rows) as i32 - 1);
+        let y0 = (cy - radius).max(0);
+        let y1 = (cy + radius).min(UI_HEIGHT as i32 - 1);
         for y in y0..=y1 {
             let dy = y - cy;
-            for x in (cx - radius).max(0)..=(cx + radius).min(LCD_H_RES as i32 - 1) {
+            for x in (cx - radius).max(0)..=(cx + radius).min(UI_WIDTH as i32 - 1) {
                 let dx = x - cx;
                 if dx * dx + dy * dy <= r2 {
-                    self.output[(y as usize - self.y_start) * LCD_H_RES + x as usize] = color;
+                    self.set_pixel(x, y, color);
                 }
             }
         }
     }
+
+    fn set_pixel(&mut self, x: i32, y: i32, color: Color) {
+        let Some((physical_x, physical_y)) = logical_to_physical(x, y) else {
+            return;
+        };
+        if physical_y < self.y_start || physical_y >= self.y_start + self.rows {
+            return;
+        }
+
+        let row = physical_y - self.y_start;
+        self.output[row * PHYSICAL_H_RES + physical_x] = color;
+    }
 }
 
-#[derive(Clone, Copy)]
-pub enum Mood {
-    Calm,
-    Busy,
-    Hot,
+fn logical_to_physical(x: i32, y: i32) -> Option<(usize, usize)> {
+    if x < 0 || y < 0 || x >= UI_WIDTH as i32 || y >= UI_HEIGHT as i32 {
+        return None;
+    }
+
+    let x = x as usize;
+    let y = y as usize;
+    if UI_LANDSCAPE_CLOCKWISE {
+        Some((y, PHYSICAL_V_RES - 1 - x))
+    } else {
+        Some((x, y))
+    }
+}
+
+fn physical_to_logical(physical_x: usize, physical_y: usize) -> (usize, usize) {
+    if UI_LANDSCAPE_CLOCKWISE {
+        (PHYSICAL_V_RES - 1 - physical_y, physical_x)
+    } else {
+        (physical_x, physical_y)
+    }
 }
 
 const fn rgb565(red: u8, green: u8, blue: u8) -> Color {

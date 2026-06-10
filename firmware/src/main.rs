@@ -4,9 +4,10 @@ mod network;
 mod time;
 
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use app::usage::{draw_network_status, draw_usage_snapshot, draw_waiting};
+use app::status::{draw_network_status, draw_waiting, network_status_is_animating};
+use app::usage::draw_usage_snapshot;
 use drivers::display::{disable_panel, EspResult, Sh8601};
 use drivers::touch::Ft3168;
 use network::{AppCommand, NetworkStatus, UsageSnapshot};
@@ -49,6 +50,8 @@ fn run() -> EspResult {
     let mut current_usage: Option<UsageSnapshot> = None;
     let mut current_network_status: Option<NetworkStatus> = None;
     let mut selected_provider = 0;
+    let mut status_animation_frame = 0_u8;
+    let mut last_status_animation = Instant::now();
     let mut was_touching = false;
     let mut touch_error_logged = false;
     loop {
@@ -60,19 +63,29 @@ fn run() -> EspResult {
                     &panel,
                     &current_usage,
                     &current_network_status,
+                    status_animation_frame,
                     &mut selected_provider,
                 )?,
                 AppCommand::NetworkStatus { status } => {
                     if current_usage.is_none() {
-                        draw_network_status(&panel, &status)?;
+                        draw_network_status(&panel, &status, status_animation_frame)?;
                     }
                     current_network_status = Some(status);
                 }
                 AppCommand::UpdateUsage { snapshot } => {
-                    selected_provider =
-                        selected_provider.min(snapshot.providers.len().saturating_sub(1));
-                    draw_usage_snapshot(&panel, &snapshot, selected_provider)?;
-                    current_usage = Some(snapshot);
+                    if snapshot.providers.is_empty() {
+                        current_usage = None;
+                        if let Some(status) = &current_network_status {
+                            draw_network_status(&panel, status, status_animation_frame)?;
+                        } else {
+                            draw_waiting(&panel)?;
+                        }
+                    } else {
+                        selected_provider =
+                            selected_provider.min(snapshot.providers.len().saturating_sub(1));
+                        draw_usage_snapshot(&panel, &snapshot, selected_provider)?;
+                        current_usage = Some(snapshot);
+                    }
                 }
             }
         }
@@ -96,10 +109,23 @@ fn run() -> EspResult {
                 &panel,
                 &current_usage,
                 &current_network_status,
+                status_animation_frame,
                 &mut selected_provider,
             )?;
         }
         was_touching = touching;
+
+        if current_usage.is_none() {
+            if let Some(status) = &current_network_status {
+                if network_status_is_animating(status)
+                    && last_status_animation.elapsed() >= Duration::from_millis(55)
+                {
+                    status_animation_frame = status_animation_frame.wrapping_add(1);
+                    last_status_animation = Instant::now();
+                    draw_network_status(&panel, status, status_animation_frame)?;
+                }
+            }
+        }
         sleep_ms(20);
     }
 }
@@ -135,11 +161,12 @@ fn cycle_provider(
     panel: &Sh8601,
     current_usage: &Option<UsageSnapshot>,
     current_network_status: &Option<NetworkStatus>,
+    status_animation_frame: u8,
     selected_provider: &mut usize,
 ) -> EspResult {
     let Some(snapshot) = current_usage else {
         if let Some(status) = current_network_status {
-            draw_network_status(panel, status)?;
+            draw_network_status(panel, status, status_animation_frame)?;
             return Ok(());
         }
         draw_waiting(panel)?;
@@ -147,7 +174,7 @@ fn cycle_provider(
     };
     if snapshot.providers.is_empty() {
         if let Some(status) = current_network_status {
-            draw_network_status(panel, status)?;
+            draw_network_status(panel, status, status_animation_frame)?;
             return Ok(());
         }
         draw_waiting(panel)?;
