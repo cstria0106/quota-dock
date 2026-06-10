@@ -1,8 +1,9 @@
-use std::io::{BufRead, BufReader, Write};
 use std::time::Duration;
 
 use eframe::egui;
-use serde::{Deserialize, Serialize};
+use monitor_core::http::{http_command, http_status};
+use monitor_core::serial::{send_serial, serial_port_names};
+use monitor_core::{DeviceCommand, SerialRequest};
 
 const DEFAULT_DEVICE_URL: &str = "http://192.168.1.50";
 const SERIAL_BAUD: u32 = 115_200;
@@ -29,22 +30,6 @@ struct MonitorApp {
     brightness: u8,
     log: Vec<String>,
     status: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum SerialRequest {
-    Status,
-    SetWifi { ssid: String, password: String },
-    Command { command: DeviceCommand },
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum DeviceCommand {
-    Ping,
-    SetBrightness { value: u8 },
-    CycleUsageProvider,
 }
 
 impl eframe::App for MonitorApp {
@@ -82,20 +67,16 @@ impl MonitorApp {
         });
 
         if ui.button("Refresh Ports").clicked() {
-            match serialport::available_ports() {
+            match serial_port_names() {
                 Ok(ports) => {
                     if self.serial_port.is_empty() {
                         if let Some(port) = ports.first() {
-                            self.serial_port = port.port_name.clone();
+                            self.serial_port = port.clone();
                         }
                     }
                     self.push_log(format!(
                         "ports: {}",
-                        ports
-                            .into_iter()
-                            .map(|port| port.port_name)
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        ports.into_iter().collect::<Vec<_>>().join(", ")
                     ));
                 }
                 Err(err) => self.push_log(format!("port scan failed: {err}")),
@@ -133,8 +114,13 @@ impl MonitorApp {
         });
 
         if ui.button("Fetch Status").clicked() {
-            match self.http_get("/status") {
-                Ok(body) => {
+            match http_status(&self.device_url) {
+                Ok(status) => {
+                    let body = format!(
+                        "connected={} ip={}",
+                        status.connected,
+                        status.ip.as_deref().unwrap_or("-")
+                    );
                     self.status = body.clone();
                     self.push_log(format!("status: {body}"));
                 }
@@ -170,68 +156,28 @@ impl MonitorApp {
             return;
         }
 
-        let json = match serde_json::to_string(&request) {
-            Ok(json) => json,
-            Err(err) => {
-                self.push_log(format!("serial encode failed: {err}"));
-                return;
-            }
-        };
-
-        match self.write_serial_line(&json) {
-            Ok(response) => self.push_log(format!("serial: {response}")),
+        match send_serial(
+            &self.serial_port,
+            SERIAL_BAUD,
+            &request,
+            Duration::from_secs(3),
+        ) {
+            Ok(response) => self.push_log(format!(
+                "serial: ok={} message={}",
+                response.ok, response.message
+            )),
             Err(err) => self.push_log(format!("serial failed: {err}")),
         }
     }
 
-    fn write_serial_line(&self, line: &str) -> Result<String, String> {
-        let mut port = serialport::new(&self.serial_port, SERIAL_BAUD)
-            .timeout(Duration::from_secs(3))
-            .open()
-            .map_err(|err| err.to_string())?;
-
-        writeln!(port, "{line}").map_err(|err| err.to_string())?;
-        port.flush().map_err(|err| err.to_string())?;
-
-        let mut reader = BufReader::new(port);
-        let mut response = String::new();
-        reader
-            .read_line(&mut response)
-            .map_err(|err| err.to_string())?;
-        Ok(response.trim().to_string())
-    }
-
     fn send_http_command(&mut self, command: DeviceCommand) {
-        match self.http_post("/command", &command) {
-            Ok(body) => self.push_log(format!("command: {body}")),
+        match http_command(&self.device_url, &command) {
+            Ok(response) => self.push_log(format!(
+                "command: ok={} message={}",
+                response.ok, response.message
+            )),
             Err(err) => self.push_log(format!("command failed: {err}")),
         }
-    }
-
-    fn http_get(&self, path: &str) -> Result<String, String> {
-        let url = self.url(path);
-        reqwest::blocking::get(url)
-            .map_err(|err| err.to_string())?
-            .text()
-            .map_err(|err| err.to_string())
-    }
-
-    fn http_post<T: Serialize>(&self, path: &str, body: &T) -> Result<String, String> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(4))
-            .build()
-            .map_err(|err| err.to_string())?;
-        client
-            .post(self.url(path))
-            .json(body)
-            .send()
-            .map_err(|err| err.to_string())?
-            .text()
-            .map_err(|err| err.to_string())
-    }
-
-    fn url(&self, path: &str) -> String {
-        format!("{}{}", self.device_url.trim_end_matches('/'), path)
     }
 
     fn push_log(&mut self, line: String) {
