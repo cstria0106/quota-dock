@@ -10,6 +10,7 @@ use crate::drivers::display::{EspResult, Sh8601};
 
 const DIFF_UNION_AREA_NUMERATOR: i64 = 4;
 const DIFF_UNION_AREA_DENOMINATOR: i64 = 3;
+const DIRTY_RECT_PAD: i32 = 2;
 const LOADING_DOT_COUNT: i32 = 3;
 const LOADING_DOT_RADIUS: i32 = 8;
 const LOADING_DOT_SPACING: i32 = 34;
@@ -430,7 +431,7 @@ impl Renderer {
             Some(rendered_scene) => rendered_scene.coalesced_diff_rects(&scene, self.frame),
             None => vec![Rect::full()],
         };
-        self.dirty = dirty;
+        self.dirty = dirty.into_iter().filter_map(padded_dirty_rect).collect();
         self.scene = Some(scene);
         self.frame = 0;
         self.last_frame = Instant::now();
@@ -491,12 +492,9 @@ impl Renderer {
     }
 
     fn mark_dirty(&mut self, rect: Rect) {
-        let rect = rect.clamp_to_screen();
-        if rect.is_empty() {
-            return;
+        if let Some(rect) = padded_dirty_rect(rect) {
+            self.dirty.push(rect);
         }
-
-        self.dirty.push(rect);
     }
 
     fn draw(&self, panel: &mut Sh8601, scene: &Scene, dirty: Rect) -> EspResult {
@@ -521,4 +519,9 @@ impl Renderer {
 
 fn rect_area(rect: Rect) -> i64 {
     i64::from(rect.w.max(0)) * i64::from(rect.h.max(0))
+}
+
+fn padded_dirty_rect(rect: Rect) -> Option<Rect> {
+    let rect = rect.expand(DIRTY_RECT_PAD);
+    (!rect.is_empty()).then_some(rect)
 }
