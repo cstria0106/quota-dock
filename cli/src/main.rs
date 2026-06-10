@@ -60,6 +60,7 @@ enum Commands {
         offset: Option<String>,
     },
     Reset,
+    ClearWifi,
     Provision {
         #[arg(long, default_value = DEFAULT_CONFIG_FILE)]
         config: PathBuf,
@@ -100,6 +101,7 @@ enum UsageProviderArg {
 enum SerialRequest {
     Status,
     SetWifi { ssid: String, password: String },
+    ClearWifi,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,6 +151,16 @@ fn run(cli: Cli) -> Result<(), String> {
             )
         }
         Commands::Reset => reset_device(&cli.port, cli.baud),
+        Commands::ClearWifi => {
+            let response = send_serial(
+                &cli.port,
+                cli.baud,
+                &SerialRequest::ClearWifi,
+                Duration::from_secs(30),
+            )?;
+            print_api_response("clear wifi", &response);
+            Ok(())
+        }
         Commands::Provision { config } => {
             let credentials = read_config_file(&config)?
                 .wifi

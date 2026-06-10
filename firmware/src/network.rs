@@ -84,6 +84,7 @@ struct StatusResponse {
 enum SerialRequest {
     Status,
     SetWifi { ssid: String, password: String },
+    ClearWifi,
     Command { command: AppCommand },
 }
 
@@ -100,9 +101,14 @@ struct NetworkState {
     event: Option<String>,
 }
 
-struct CredentialRequest {
-    credentials: WifiCredentials,
-    response_tx: mpsc::Sender<Result<(), String>>,
+enum CredentialRequest {
+    Set {
+        credentials: WifiCredentials,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
+    Clear {
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
 }
 
 pub fn start() -> CommandReceiver {
@@ -165,28 +171,49 @@ fn network_task(command_tx: mpsc::Sender<AppCommand>) -> anyhow::Result<()> {
 
     loop {
         if let Ok(request) = credential_rx.try_recv() {
-            set_event(&state, "save_wifi_config");
-            let save_result = save_credentials(nvs_partition.clone(), &request.credentials)
-                .map_err(|err| format!("{err:?}"));
-            let should_connect = save_result.is_ok();
-            let _ = request.response_tx.send(save_result);
+            match request {
+                CredentialRequest::Set {
+                    credentials,
+                    response_tx,
+                } => {
+                    set_event(&state, "save_wifi_config");
+                    let save_result = save_credentials(nvs_partition.clone(), &credentials)
+                        .map_err(|err| format!("{err:?}"));
+                    let should_connect = save_result.is_ok();
+                    let _ = response_tx.send(save_result);
 
-            if should_connect {
-                send_network_status(&command_tx, true, false, None);
-                set_event(&state, "connect_provisioned_credentials");
-                if let Err(err) = connect_wifi(&mut wifi, Some(&request.credentials), state.clone())
-                {
-                    set_event(&state, "provisioned_wifi_connect_failed");
-                    send_network_status(&command_tx, true, false, None);
-                    println!("Provisioned Wi-Fi credentials failed: {err:?}");
-                } else if server.is_none() {
-                    send_current_network_status(&command_tx, &state, true);
-                    set_event(&state, "http_server_start");
-                    server = Some(start_http_server(command_tx.clone(), state.clone())?);
-                    set_event(&state, "http_server_ready");
-                    send_current_network_status(&command_tx, &state, true);
-                } else {
-                    send_current_network_status(&command_tx, &state, true);
+                    if should_connect {
+                        send_network_status(&command_tx, true, false, None);
+                        set_event(&state, "connect_provisioned_credentials");
+                        if let Err(err) = connect_wifi(&mut wifi, Some(&credentials), state.clone())
+                        {
+                            set_event(&state, "provisioned_wifi_connect_failed");
+                            send_network_status(&command_tx, true, false, None);
+                            println!("Provisioned Wi-Fi credentials failed: {err:?}");
+                        } else if server.is_none() {
+                            send_current_network_status(&command_tx, &state, true);
+                            set_event(&state, "http_server_start");
+                            server = Some(start_http_server(command_tx.clone(), state.clone())?);
+                            set_event(&state, "http_server_ready");
+                            send_current_network_status(&command_tx, &state, true);
+                        } else {
+                            send_current_network_status(&command_tx, &state, true);
+                        }
+                    }
+                }
+                CredentialRequest::Clear { response_tx } => {
+                    set_event(&state, "clear_wifi_config");
+                    let clear_result = clear_credentials(nvs_partition.clone())
+                        .and_then(|_| stop_wifi(&mut wifi, state.clone()))
+                        .map_err(|err| format!("{err:?}"));
+                    let did_clear = clear_result.is_ok();
+                    let _ = response_tx.send(clear_result);
+
+                    if did_clear {
+                        server = None;
+                        send_network_status(&command_tx, false, false, None);
+                        set_event(&state, "wifi_credentials_cleared");
+                    }
                 }
             }
         }
@@ -288,7 +315,7 @@ fn handle_serial_line(
         SerialRequest::SetWifi { ssid, password } => {
             set_event(state, "serial_set_wifi_received");
             let (response_tx, response_rx) = mpsc::channel();
-            if let Err(err) = credential_tx.send(CredentialRequest {
+            if let Err(err) = credential_tx.send(CredentialRequest::Set {
                 credentials: WifiCredentials { ssid, password },
                 response_tx,
             }) {
@@ -313,6 +340,35 @@ fn handle_serial_line(
                     ApiResponse {
                         ok: false,
                         message: format!("wifi credential save timed out: {err}"),
+                    }
+                }
+            }
+        }
+        SerialRequest::ClearWifi => {
+            set_event(state, "serial_clear_wifi_received");
+            let (response_tx, response_rx) = mpsc::channel();
+            if let Err(err) = credential_tx.send(CredentialRequest::Clear { response_tx }) {
+                return ApiResponse {
+                    ok: false,
+                    message: format!("wifi credential clear queue failed: {err}"),
+                };
+            }
+            set_event(state, "serial_clear_wifi_queued");
+
+            match response_rx.recv_timeout(Duration::from_secs(25)) {
+                Ok(Ok(())) => ApiResponse {
+                    ok: true,
+                    message: "wifi credentials cleared".to_string(),
+                },
+                Ok(Err(err)) => ApiResponse {
+                    ok: false,
+                    message: format!("wifi credential clear failed: {err}"),
+                },
+                Err(err) => {
+                    set_event(state, "serial_clear_wifi_response_timeout");
+                    ApiResponse {
+                        ok: false,
+                        message: format!("wifi credential clear timed out: {err}"),
                     }
                 }
             }
@@ -454,6 +510,23 @@ fn connect_wifi(
     Ok(())
 }
 
+fn stop_wifi(
+    wifi: &mut BlockingWifi<EspWifi<'static>>,
+    state: Arc<Mutex<NetworkState>>,
+) -> anyhow::Result<()> {
+    if wifi.is_started().unwrap_or(false) {
+        let _ = wifi.disconnect();
+        wifi.stop()?;
+    }
+    set_wifi_mode_sta()?;
+    if let Ok(mut state) = state.lock() {
+        state.connected = false;
+        state.ip = None;
+        state.event = Some("wifi_stopped".to_string());
+    }
+    Ok(())
+}
+
 fn client_configuration(credentials: &WifiCredentials) -> anyhow::Result<ClientConfiguration> {
     let ssid: HeaplessString<32> = credentials
         .ssid
@@ -514,6 +587,17 @@ fn save_credentials(
         }
         _ => anyhow::bail!("saved Wi-Fi credentials did not round-trip through NVS"),
     }
+}
+
+fn clear_credentials(partition: EspDefaultNvsPartition) -> anyhow::Result<()> {
+    let nvs = EspNvs::new(partition.clone(), NVS_NAMESPACE, true)?;
+    let _ = nvs.remove(NVS_WIFI_SSID)?;
+    let _ = nvs.remove(NVS_WIFI_PASSWORD)?;
+
+    if load_credentials(partition)?.is_some() {
+        anyhow::bail!("cleared Wi-Fi credentials still exist in NVS");
+    }
+    Ok(())
 }
 
 fn set_event(state: &Arc<Mutex<NetworkState>>, event: &str) {
