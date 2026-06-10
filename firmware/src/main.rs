@@ -6,10 +6,10 @@ mod time;
 use std::thread;
 use std::time::Duration;
 
-use app::usage::{draw_usage_snapshot, draw_waiting};
+use app::usage::{draw_network_status, draw_usage_snapshot, draw_waiting};
 use drivers::display::{disable_panel, EspResult, Sh8601};
 use drivers::touch::Ft3168;
-use network::{AppCommand, UsageSnapshot};
+use network::{AppCommand, NetworkStatus, UsageSnapshot};
 use time::sleep_ms;
 
 const DISPLAY_ENABLED: bool = true;
@@ -47,6 +47,7 @@ fn run() -> EspResult {
     draw_waiting(&panel)?;
 
     let mut current_usage: Option<UsageSnapshot> = None;
+    let mut current_network_status: Option<NetworkStatus> = None;
     let mut selected_provider = 0;
     let mut was_touching = false;
     let mut touch_error_logged = false;
@@ -55,8 +56,17 @@ fn run() -> EspResult {
             match command {
                 AppCommand::Ping => println!("Received ping command"),
                 AppCommand::SetBrightness { value } => panel.set_brightness(value)?,
-                AppCommand::CycleUsageProvider => {
-                    cycle_provider(&panel, &current_usage, &mut selected_provider)?
+                AppCommand::CycleUsageProvider => cycle_provider(
+                    &panel,
+                    &current_usage,
+                    &current_network_status,
+                    &mut selected_provider,
+                )?,
+                AppCommand::NetworkStatus { status } => {
+                    if current_usage.is_none() {
+                        draw_network_status(&panel, &status)?;
+                    }
+                    current_network_status = Some(status);
                 }
                 AppCommand::UpdateUsage { snapshot } => {
                     selected_provider =
@@ -82,7 +92,12 @@ fn run() -> EspResult {
         };
         if touching && !was_touching {
             println!("Touch cycle provider");
-            cycle_provider(&panel, &current_usage, &mut selected_provider)?;
+            cycle_provider(
+                &panel,
+                &current_usage,
+                &current_network_status,
+                &mut selected_provider,
+            )?;
         }
         was_touching = touching;
         sleep_ms(20);
@@ -100,6 +115,9 @@ fn run_without_display(commands: network::CommandReceiver) -> ! {
                 AppCommand::CycleUsageProvider => {
                     println!("Display disabled; cycle command ignored")
                 }
+                AppCommand::NetworkStatus { status } => {
+                    println!("Display disabled; network status ignored: {status:?}")
+                }
                 AppCommand::UpdateUsage { snapshot } => {
                     println!(
                         "Display disabled; usage update ignored: {} providers",
@@ -116,13 +134,22 @@ fn run_without_display(commands: network::CommandReceiver) -> ! {
 fn cycle_provider(
     panel: &Sh8601,
     current_usage: &Option<UsageSnapshot>,
+    current_network_status: &Option<NetworkStatus>,
     selected_provider: &mut usize,
 ) -> EspResult {
     let Some(snapshot) = current_usage else {
+        if let Some(status) = current_network_status {
+            draw_network_status(panel, status)?;
+            return Ok(());
+        }
         draw_waiting(panel)?;
         return Ok(());
     };
     if snapshot.providers.is_empty() {
+        if let Some(status) = current_network_status {
+            draw_network_status(panel, status)?;
+            return Ok(());
+        }
         draw_waiting(panel)?;
         return Ok(());
     }

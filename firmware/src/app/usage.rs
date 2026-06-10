@@ -1,5 +1,5 @@
 use crate::drivers::display::{EspResult, Sh8601, LCD_H_RES};
-use crate::network::{UsageProvider, UsageSnapshot, UsageWindow};
+use crate::network::{NetworkStatus, UsageProvider, UsageSnapshot, UsageWindow};
 
 const BG: u16 = rgb565(16, 18, 24);
 const BG_DOT: u16 = rgb565(22, 25, 33);
@@ -31,6 +31,31 @@ pub fn draw_waiting(panel: &Sh8601) -> EspResult {
         draw_text(output, y, rows, 68, 246, "WAITING", 3, TEXT);
         draw_text(output, y, rows, 42, 304, "PUSH USAGE FROM CLI", 1, MUTED);
         draw_meter_shell(output, y, rows, 30, 350, 220, 26, PANEL_DIM);
+    })
+}
+
+pub fn draw_network_status(panel: &Sh8601, status: &NetworkStatus) -> EspResult {
+    let (title, detail, accent, mood) = if !status.has_credentials {
+        ("SETUP WIFI", "RUN CLI PROVISION", AMBER, Mood::Busy)
+    } else if status.connected {
+        (
+            "WIFI READY",
+            status.ip.as_deref().unwrap_or("NO IP"),
+            MINT,
+            Mood::Calm,
+        )
+    } else {
+        ("WIFI WAIT", "CONNECTING", TEAL, Mood::Busy)
+    };
+
+    panel.draw_rows(|output, y, rows| {
+        fill_background(output, y, rows);
+        draw_text(output, y, rows, 31, 24, "AGENT QUOTA", 2, TEXT);
+        draw_face(output, y, rows, LCD_H_RES as i32 / 2, 142, 50, accent, mood);
+        draw_text(output, y, rows, 38, 234, title, 3, TEXT);
+        draw_text(output, y, rows, 42, 298, detail, 1, MUTED);
+        draw_text(output, y, rows, 36, 340, "WAITING FOR QUOTA", 1, MUTED);
+        draw_meter_shell(output, y, rows, 30, 386, 220, 26, PANEL_DIM);
     })
 }
 

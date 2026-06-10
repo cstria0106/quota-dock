@@ -29,7 +29,15 @@ pub enum AppCommand {
     Ping,
     SetBrightness { value: u8 },
     CycleUsageProvider,
+    NetworkStatus { status: NetworkStatus },
     UpdateUsage { snapshot: UsageSnapshot },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NetworkStatus {
+    pub has_credentials: bool,
+    pub connected: bool,
+    pub ip: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -136,17 +144,22 @@ fn network_task(command_tx: mpsc::Sender<AppCommand>) -> anyhow::Result<()> {
     let mut server: Option<EspHttpServer<'static>> = None;
 
     if let Some(credentials) = load_credentials(nvs_partition.clone())? {
+        send_network_status(&command_tx, true, false, None);
         set_event(&state, "boot_connect_stored_credentials");
         if let Err(err) = connect_wifi(&mut wifi, Some(&credentials), state.clone()) {
             set_event(&state, "stored_wifi_connect_failed");
+            send_network_status(&command_tx, true, false, None);
             println!("Stored Wi-Fi credentials failed: {err:?}");
         } else if server.is_none() {
+            send_current_network_status(&command_tx, &state, true);
             set_event(&state, "http_server_start");
             server = Some(start_http_server(command_tx.clone(), state.clone())?);
             set_event(&state, "http_server_ready");
+            send_current_network_status(&command_tx, &state, true);
         }
     } else {
         set_event(&state, "no_stored_credentials");
+        send_network_status(&command_tx, false, false, None);
         println!("No stored Wi-Fi credentials. Send JSON over USB serial to provision.");
     }
 
@@ -159,15 +172,21 @@ fn network_task(command_tx: mpsc::Sender<AppCommand>) -> anyhow::Result<()> {
             let _ = request.response_tx.send(save_result);
 
             if should_connect {
+                send_network_status(&command_tx, true, false, None);
                 set_event(&state, "connect_provisioned_credentials");
                 if let Err(err) = connect_wifi(&mut wifi, Some(&request.credentials), state.clone())
                 {
                     set_event(&state, "provisioned_wifi_connect_failed");
+                    send_network_status(&command_tx, true, false, None);
                     println!("Provisioned Wi-Fi credentials failed: {err:?}");
                 } else if server.is_none() {
+                    send_current_network_status(&command_tx, &state, true);
                     set_event(&state, "http_server_start");
                     server = Some(start_http_server(command_tx.clone(), state.clone())?);
                     set_event(&state, "http_server_ready");
+                    send_current_network_status(&command_tx, &state, true);
+                } else {
+                    send_current_network_status(&command_tx, &state, true);
                 }
             }
         }
@@ -175,6 +194,30 @@ fn network_task(command_tx: mpsc::Sender<AppCommand>) -> anyhow::Result<()> {
         let _ = &mut server;
         thread::sleep(Duration::from_secs(5));
     }
+}
+
+fn send_network_status(
+    command_tx: &mpsc::Sender<AppCommand>,
+    has_credentials: bool,
+    connected: bool,
+    ip: Option<String>,
+) {
+    let _ = command_tx.send(AppCommand::NetworkStatus {
+        status: NetworkStatus {
+            has_credentials,
+            connected,
+            ip,
+        },
+    });
+}
+
+fn send_current_network_status(
+    command_tx: &mpsc::Sender<AppCommand>,
+    state: &Arc<Mutex<NetworkState>>,
+    has_credentials: bool,
+) {
+    let status = current_status(state);
+    send_network_status(command_tx, has_credentials, status.connected, status.ip);
 }
 
 fn start_serial_task(
