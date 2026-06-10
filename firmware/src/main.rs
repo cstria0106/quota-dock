@@ -4,7 +4,7 @@ mod network;
 mod time;
 
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use app::renderer::{Renderer, Scene};
 use app::status::{network_status_scene, waiting_scene};
@@ -51,10 +51,12 @@ fn run() -> EspResult {
     renderer.tick(&panel)?;
 
     let mut current_usage: Option<UsageSnapshot> = None;
+    let mut current_usage_received_at: Option<Instant> = None;
     let mut current_network_status: Option<NetworkStatus> = None;
     let mut selected_provider = 0;
     let mut was_touching = false;
     let mut touch_error_logged = false;
+    let mut last_usage_countdown_refresh = Instant::now();
     loop {
         while let Ok(command) = commands.try_recv() {
             match command {
@@ -65,6 +67,7 @@ fn run() -> EspResult {
                         refresh_scene(
                             &mut renderer,
                             &current_usage,
+                            current_usage_received_at,
                             &current_network_status,
                             selected_provider,
                         );
@@ -75,6 +78,7 @@ fn run() -> EspResult {
                     refresh_scene(
                         &mut renderer,
                         &current_usage,
+                        current_usage_received_at,
                         &current_network_status,
                         selected_provider,
                     );
@@ -85,12 +89,16 @@ fn run() -> EspResult {
                     {
                         selected_provider = provider;
                         current_usage = Some(snapshot);
+                        current_usage_received_at = Some(Instant::now());
+                        last_usage_countdown_refresh = Instant::now();
                     } else {
                         current_usage = None;
+                        current_usage_received_at = None;
                     }
                     refresh_scene(
                         &mut renderer,
                         &current_usage,
+                        current_usage_received_at,
                         &current_network_status,
                         selected_provider,
                     );
@@ -117,12 +125,26 @@ fn run() -> EspResult {
                 refresh_scene(
                     &mut renderer,
                     &current_usage,
+                    current_usage_received_at,
                     &current_network_status,
                     selected_provider,
                 );
             }
         }
         was_touching = touching;
+
+        if current_usage.is_some()
+            && last_usage_countdown_refresh.elapsed() >= Duration::from_secs(1)
+        {
+            refresh_scene(
+                &mut renderer,
+                &current_usage,
+                current_usage_received_at,
+                &current_network_status,
+                selected_provider,
+            );
+            last_usage_countdown_refresh = Instant::now();
+        }
 
         renderer.tick(&panel)?;
         sleep_ms(20);
@@ -170,11 +192,13 @@ fn cycle_provider(current_usage: &Option<UsageSnapshot>, selected_provider: &mut
 fn refresh_scene(
     renderer: &mut Renderer,
     current_usage: &Option<UsageSnapshot>,
+    current_usage_received_at: Option<Instant>,
     current_network_status: &Option<NetworkStatus>,
     selected_provider: usize,
 ) {
     renderer.set_scene(current_scene(
         current_usage,
+        current_usage_received_at,
         current_network_status,
         selected_provider,
     ));
@@ -182,11 +206,15 @@ fn refresh_scene(
 
 fn current_scene(
     current_usage: &Option<UsageSnapshot>,
+    current_usage_received_at: Option<Instant>,
     current_network_status: &Option<NetworkStatus>,
     selected_provider: usize,
 ) -> Scene {
     if let Some(snapshot) = current_usage {
-        return usage_scene(snapshot, selected_provider);
+        let elapsed_since_update_secs = current_usage_received_at
+            .map(|instant| instant.elapsed().as_secs())
+            .unwrap_or_default();
+        return usage_scene(snapshot, selected_provider, elapsed_since_update_secs);
     }
     if let Some(status) = current_network_status {
         return network_status_scene(status);

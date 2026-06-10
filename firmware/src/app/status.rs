@@ -19,11 +19,12 @@ pub fn network_status_scene(status: &NetworkStatus) -> Scene {
 
 fn wifi_setup_scene() -> Scene {
     let mut scene = Scene::new();
-    scene.push(UiObject::text(
+    scene.push(UiObject::text_with_font(
         0,
         UI_HEIGHT as i32 / 2 - 16,
         UI_WIDTH as i32,
-        text::SETUP_WIFI,
+        text::SETUP_WIFI.value,
+        text::SETUP_WIFI.font,
         2,
         color::TEXT,
         TextAlign::Center,
@@ -33,11 +34,12 @@ fn wifi_setup_scene() -> Scene {
 
 fn wifi_connecting_scene() -> Scene {
     let mut scene = Scene::new();
-    scene.push(UiObject::text(
+    scene.push(UiObject::text_with_font(
         0,
         88,
         UI_WIDTH as i32,
-        text::CONNECTING_WIFI,
+        text::CONNECTING_WIFI.value,
+        text::CONNECTING_WIFI.font,
         2,
         color::TEXT,
         TextAlign::Center,
@@ -48,23 +50,37 @@ fn wifi_connecting_scene() -> Scene {
 
 fn usage_wait_scene(ip: Option<&str>) -> Scene {
     let mut scene = Scene::new();
-    scene.push(UiObject::text(
+    scene.push(UiObject::text_with_font(
         0,
         78,
         UI_WIDTH as i32,
-        text::WAITING_FOR_USAGE,
+        text::WAITING_FOR_USAGE.value,
+        text::WAITING_FOR_USAGE.font,
         2,
         color::TEXT,
         TextAlign::Center,
     ));
-    scene.push(UiObject::text(
-        0,
-        148,
-        UI_WIDTH as i32,
-        ip.unwrap_or(text::NO_IP),
-        2,
-        color::MINT,
-        TextAlign::Center,
-    ));
+    if let Some(ip) = ip {
+        scene.push(UiObject::text(
+            0,
+            148,
+            UI_WIDTH as i32,
+            ip,
+            2,
+            color::MINT,
+            TextAlign::Center,
+        ));
+    } else {
+        scene.push(UiObject::text_with_font(
+            0,
+            148,
+            UI_WIDTH as i32,
+            text::NO_IP.value,
+            text::NO_IP.font,
+            2,
+            color::MINT,
+            TextAlign::Center,
+        ));
+    }
     scene
 }

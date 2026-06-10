@@ -5,12 +5,13 @@ use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::Deserialize;
 
 use super::{
-    HTTP_TIMEOUT, UsageCollector, UsageProvider, UsageRegistry, clamp_percent_i64, codex_home,
-    local, read_json, window,
+    HTTP_TIMEOUT, UsageCollector, UsagePixelArt, UsageProvider, UsageRegistry, UsageTheme,
+    clamp_percent_i64, codex_home, local, read_json, window,
 };
 
 pub const PROVIDER_ID: &str = "CODEX";
 const THEME_COLOR: &str = "#3B82F6";
+const PIXEL_ART_SIZE: usize = 32;
 
 pub struct CodexUsageCollector;
 
@@ -22,9 +23,14 @@ impl UsageCollector for CodexUsageCollector {
     fn collect(&self) -> UsageProvider {
         match fetch_codex_oauth_provider() {
             Ok(provider) => provider,
-            Err(err) => {
-                local::estimate_provider(PROVIDER_ID, "CODEX", THEME_COLOR, codex_log_roots(), err)
-            }
+            Err(err) => local::estimate_provider(
+                PROVIDER_ID,
+                "CODEX",
+                codex_theme(),
+                codex_pixel_art(),
+                codex_log_roots(),
+                err,
+            ),
         }
     }
 }
@@ -81,7 +87,7 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
     if let Some(primary) = rate_limit.primary_window {
         windows.push(window(
             "5h",
-            "5H",
+            "5h",
             clamp_percent_i64(primary.used_percent),
             Some(format!("unix:{}", primary.reset_at)),
             "live",
@@ -90,7 +96,7 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
     if let Some(secondary) = rate_limit.secondary_window {
         windows.push(window(
             "7d",
-            "7D",
+            "Week",
             clamp_percent_i64(secondary.used_percent),
             Some(format!("unix:{}", secondary.reset_at)),
             "live",
@@ -104,6 +110,8 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
         id: PROVIDER_ID.to_string(),
         label: "CODEX".to_string(),
         theme_color: Some(THEME_COLOR.to_string()),
+        theme: Some(codex_theme()),
+        pixel_art: Some(codex_pixel_art()),
         source: "oauth".to_string(),
         account: None,
         plan: usage.plan_type.map(|plan| plan.to_ascii_uppercase()),
@@ -114,6 +122,25 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
 fn codex_log_roots() -> Vec<PathBuf> {
     let root = codex_home();
     vec![root.join("sessions"), root.join("archived_sessions")]
+}
+
+fn codex_theme() -> UsageTheme {
+    UsageTheme {
+        accent: THEME_COLOR.to_string(),
+        panel: "#101823".to_string(),
+        panel_soft: "#162338".to_string(),
+        primary_panel: "#111C2D".to_string(),
+        primary_panel_soft: "#1A3154".to_string(),
+        track: "#263141".to_string(),
+        pill: "#263246".to_string(),
+    }
+}
+
+fn codex_pixel_art() -> UsagePixelArt {
+    UsagePixelArt {
+        color: THEME_COLOR.to_string(),
+        rows: vec!["1".repeat(PIXEL_ART_SIZE); PIXEL_ART_SIZE],
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -83,8 +83,16 @@ pub struct PhysicalArea {
     pub h: usize,
 }
 
-mod font {
-    include!(concat!(env!("OUT_DIR"), "/generated_font.rs"));
+mod font_7 {
+    include!(concat!(env!("OUT_DIR"), "/generated_font_7.rs"));
+}
+
+mod font_9 {
+    include!(concat!(env!("OUT_DIR"), "/generated_font_9.rs"));
+}
+
+mod font_11 {
+    include!(concat!(env!("OUT_DIR"), "/generated_font_11.rs"));
 }
 
 pub mod color {
@@ -92,22 +100,98 @@ pub mod color {
 
     pub const BG: Color = rgb565(16, 18, 24);
     pub const BG_DOT: Color = rgb565(22, 25, 33);
-    pub const PANEL: Color = rgb565(32, 35, 45);
     pub const PANEL_DIM: Color = rgb565(45, 48, 58);
     pub const TEXT: Color = rgb565(240, 238, 226);
     pub const MUTED: Color = rgb565(147, 151, 163);
     pub const MINT: Color = rgb565(64, 215, 164);
     pub const TEAL: Color = rgb565(54, 178, 202);
-    pub const AMBER: Color = rgb565(248, 190, 76);
-    pub const CORAL: Color = rgb565(241, 93, 86);
-    pub const SHINE: Color = rgb565(255, 245, 202);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextAlign {
     Left,
     Center,
-    Right,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FontFace {
+    Galmuri7,
+    Galmuri9,
+    Galmuri11,
+}
+
+impl FontFace {
+    pub const DEFAULT: Self = Self::Galmuri9;
+}
+
+struct BitmapGlyphRef {
+    width: u8,
+    height: u8,
+    x_offset: i8,
+    y_offset: i8,
+    advance: u8,
+    bitmap_len: u16,
+    bitmap: &'static [u8],
+}
+
+fn glyph(font: FontFace, ch: char) -> Option<BitmapGlyphRef> {
+    match font {
+        FontFace::Galmuri7 => font_7::glyph(ch).map(|glyph| {
+            let start = glyph.bitmap_offset as usize;
+            let end = start + glyph.bitmap_len as usize;
+            BitmapGlyphRef {
+                width: glyph.width,
+                height: glyph.height,
+                x_offset: glyph.x_offset,
+                y_offset: glyph.y_offset,
+                advance: glyph.advance,
+                bitmap_len: glyph.bitmap_len,
+                bitmap: &font_7::BITMAP[start..end],
+            }
+        }),
+        FontFace::Galmuri9 => font_9::glyph(ch).map(|glyph| {
+            let start = glyph.bitmap_offset as usize;
+            let end = start + glyph.bitmap_len as usize;
+            BitmapGlyphRef {
+                width: glyph.width,
+                height: glyph.height,
+                x_offset: glyph.x_offset,
+                y_offset: glyph.y_offset,
+                advance: glyph.advance,
+                bitmap_len: glyph.bitmap_len,
+                bitmap: &font_9::BITMAP[start..end],
+            }
+        }),
+        FontFace::Galmuri11 => font_11::glyph(ch).map(|glyph| {
+            let start = glyph.bitmap_offset as usize;
+            let end = start + glyph.bitmap_len as usize;
+            BitmapGlyphRef {
+                width: glyph.width,
+                height: glyph.height,
+                x_offset: glyph.x_offset,
+                y_offset: glyph.y_offset,
+                advance: glyph.advance,
+                bitmap_len: glyph.bitmap_len,
+                bitmap: &font_11::BITMAP[start..end],
+            }
+        }),
+    }
+}
+
+fn line_height(font: FontFace) -> i32 {
+    match font {
+        FontFace::Galmuri7 => font_7::LINE_HEIGHT as i32,
+        FontFace::Galmuri9 => font_9::LINE_HEIGHT as i32,
+        FontFace::Galmuri11 => font_11::LINE_HEIGHT as i32,
+    }
+}
+
+fn font_size(font: FontFace) -> i32 {
+    match font {
+        FontFace::Galmuri7 => font_7::FONT_SIZE as i32,
+        FontFace::Galmuri9 => font_9::FONT_SIZE as i32,
+        FontFace::Galmuri11 => font_11::FONT_SIZE as i32,
+    }
 }
 
 pub struct UiCanvas<'a> {
@@ -148,16 +232,43 @@ impl<'a> UiCanvas<'a> {
         }
     }
 
-    pub fn text_height(scale: i32, lines: usize) -> i32 {
-        font::LINE_HEIGHT as i32 * scale.max(1) * lines.max(1) as i32
+    pub fn text_height_for(font: FontFace, scale: i32, lines: usize) -> i32 {
+        line_height(font) * scale.max(1) * lines.max(1) as i32
     }
 
-    pub fn text(
+    pub fn text_ink_bounds_y(text: &str, font: FontFace, scale: i32) -> Option<(i32, i32)> {
+        let scale = scale.max(1);
+        let mut line_y = 0;
+        let mut min_y: Option<i32> = None;
+        let mut max_y: Option<i32> = None;
+
+        for line in text.split('\n') {
+            for ch in line.chars() {
+                let Some(glyph) = glyph(font, ch).or_else(|| glyph(font, '?')) else {
+                    continue;
+                };
+                if glyph.width == 0 || glyph.height == 0 || glyph.bitmap_len == 0 {
+                    continue;
+                }
+
+                let top = line_y + glyph.y_offset as i32 * scale;
+                let bottom = top + glyph.height as i32 * scale;
+                min_y = Some(min_y.map_or(top, |value| value.min(top)));
+                max_y = Some(max_y.map_or(bottom, |value| value.max(bottom)));
+            }
+            line_y += line_height(font) * scale;
+        }
+
+        min_y.zip(max_y)
+    }
+
+    pub fn text_with_font(
         &mut self,
         x: i32,
         y: i32,
         width: i32,
         text: &str,
+        font: FontFace,
         scale: i32,
         color: Color,
         align: TextAlign,
@@ -165,46 +276,42 @@ impl<'a> UiCanvas<'a> {
         let scale = scale.max(1);
         let mut line_y = y;
         for line in text.split('\n') {
-            let line_width = Self::text_line_width(line, scale);
+            let line_width = Self::text_line_width(line, font, scale);
             let line_x = match align {
                 TextAlign::Left => x,
                 TextAlign::Center => x + (width - line_width) / 2,
-                TextAlign::Right => x + width - line_width,
             };
-            self.text_line(line_x, line_y, line, scale, color);
-            line_y += font::LINE_HEIGHT as i32 * scale;
+            self.text_line(line_x, line_y, line, font, scale, color);
+            line_y += line_height(font) * scale;
         }
     }
 
-    fn text_line(&mut self, x: i32, y: i32, text: &str, scale: i32, color: Color) {
+    fn text_line(&mut self, x: i32, y: i32, text: &str, font: FontFace, scale: i32, color: Color) {
         let mut cursor = x;
         for ch in text.chars() {
-            self.glyph(cursor, y, ch, scale, color);
-            cursor += Self::glyph_advance(ch) * scale;
+            self.glyph(cursor, y, ch, font, scale, color);
+            cursor += Self::glyph_advance(ch, font) * scale;
             if cursor > UI_WIDTH as i32 - 2 {
                 break;
             }
         }
     }
 
-    fn glyph(&mut self, x: i32, y: i32, ch: char, scale: i32, color: Color) {
-        let Some(glyph) = font::glyph(ch).or_else(|| font::glyph('?')) else {
+    fn glyph(&mut self, x: i32, y: i32, ch: char, font: FontFace, scale: i32, color: Color) {
+        let Some(glyph) = glyph(font, ch).or_else(|| glyph(font, '?')) else {
             return;
         };
         if glyph.width == 0 || glyph.height == 0 || glyph.bitmap_len == 0 {
             return;
         }
 
-        let start = glyph.bitmap_offset as usize;
-        let end = start + glyph.bitmap_len as usize;
-        let bitmap = &font::BITMAP[start..end];
         let origin_x = x + glyph.x_offset as i32 * scale;
         let origin_y = y + glyph.y_offset as i32 * scale;
 
         for row in 0..glyph.height as usize {
             for col in 0..glyph.width as usize {
                 let bit_index = row * glyph.width as usize + col;
-                let byte = bitmap[bit_index / 8];
+                let byte = glyph.bitmap[bit_index / 8];
                 let mask = 1 << (7 - bit_index % 8);
                 if byte & mask != 0 {
                     self.rect(
@@ -219,28 +326,39 @@ impl<'a> UiCanvas<'a> {
         }
     }
 
-    fn text_line_width(text: &str, scale: i32) -> i32 {
-        text.chars().map(Self::glyph_advance).sum::<i32>() * scale
+    fn text_line_width(text: &str, font: FontFace, scale: i32) -> i32 {
+        text.chars()
+            .map(|ch| Self::glyph_advance(ch, font))
+            .sum::<i32>()
+            * scale
     }
 
-    fn glyph_advance(ch: char) -> i32 {
-        font::glyph(ch)
-            .or_else(|| font::glyph('?'))
+    fn glyph_advance(ch: char, font: FontFace) -> i32 {
+        glyph(font, ch)
+            .or_else(|| glyph(font, '?'))
             .map(|glyph| glyph.advance as i32)
-            .unwrap_or(font::FONT_SIZE as i32 / 2)
+            .unwrap_or(font_size(font) / 2)
     }
 
-    pub fn meter_shell(&mut self, x: i32, y: i32, w: i32, h: i32, border_color: Color) {
-        self.rect(x, y, w, h, border_color);
-        self.rect(x + 2, y + 2, w - 4, h - 4, color::BG);
-    }
-
-    pub fn meter_fill(&mut self, x: i32, y: i32, w: i32, h: i32, percent: u8, fill_color: Color) {
-        let fill_width = (w * percent.min(100) as i32) / 100;
-        self.rect(x, y, w, h, color::PANEL_DIM);
+    pub fn rounded_meter_fill(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        percent: u8,
+        radius: i32,
+        fill_color: Color,
+        track_color: Color,
+    ) {
+        self.rounded_rect(x, y, w, h, radius, track_color);
+        let fill_width = if percent == 0 {
+            0
+        } else {
+            ((w * percent.min(100) as i32) / 100).max(4).min(w)
+        };
         if fill_width > 0 {
-            self.rect(x, y, fill_width, h, fill_color);
-            self.rect(x, y, fill_width, (h / 3).max(1), color::SHINE);
+            self.rounded_rect(x, y, fill_width, h, radius.min(fill_width / 2), fill_color);
         }
     }
 
@@ -256,6 +374,52 @@ impl<'a> UiCanvas<'a> {
         for py in y0..y1 {
             for px in x0..x1 {
                 self.set_pixel(px, py, color);
+            }
+        }
+    }
+
+    pub fn rounded_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color) {
+        let radius = radius.max(0).min(w.min(h) / 2);
+        if radius <= 0 {
+            self.rect(x, y, w, h, color);
+            return;
+        }
+
+        let x0 = x.max(0);
+        let y0 = y.max(0);
+        let x1 = (x + w).min(UI_WIDTH as i32).max(0);
+        let y1 = (y + h).min(UI_HEIGHT as i32).max(0);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+
+        let left_center = x + radius;
+        let right_center = x + w - radius - 1;
+        let top_center = y + radius;
+        let bottom_center = y + h - radius - 1;
+        let threshold = radius * radius - radius;
+
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let cx = if px < left_center {
+                    left_center
+                } else if px > right_center {
+                    right_center
+                } else {
+                    px
+                };
+                let cy = if py < top_center {
+                    top_center
+                } else if py > bottom_center {
+                    bottom_center
+                } else {
+                    py
+                };
+                let dx = px - cx;
+                let dy = py - cy;
+                if dx * dx + dy * dy <= threshold {
+                    self.set_pixel(px, py, color);
+                }
             }
         }
     }

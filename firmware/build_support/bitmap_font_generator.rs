@@ -7,6 +7,7 @@ use std::path::Path;
 use fontdue::{Font, FontSettings};
 
 pub struct BitmapFontOptions<'a> {
+    pub font_name: &'a str,
     pub font_size: f32,
     pub font_source: &'a Path,
     pub text_source: &'a Path,
@@ -17,7 +18,7 @@ pub fn generate_bitmap_font(
     options: &BitmapFontOptions<'_>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let source = fs::read_to_string(options.text_source)?;
-    let chars = collect_font_chars(&source);
+    let chars = collect_font_chars(&source, options.font_name);
     let font_bytes = fs::read(options.font_source)?;
     let font = Font::from_bytes(font_bytes, FontSettings::default())
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
@@ -29,10 +30,11 @@ pub fn generate_bitmap_font(
     Ok(())
 }
 
-fn collect_font_chars(source: &str) -> BTreeSet<char> {
+fn collect_font_chars(source: &str, font_name: &str) -> BTreeSet<char> {
     let mut chars = BTreeSet::new();
-    collect_macro_string_chars(source, "ui_text!", &mut chars);
     collect_macro_string_chars(source, "ui_font_chars!", &mut chars);
+    collect_font_macro_string_chars(source, "ui_font_chars_for!", font_name, &mut chars);
+    collect_font_macro_string_chars(source, "ui_text!", font_name, &mut chars);
     chars
 }
 
@@ -50,6 +52,49 @@ fn collect_macro_string_chars(source: &str, macro_name: &str, chars: &mut BTreeS
         chars.extend(literal.chars());
         remaining = &remaining[next_index..];
     }
+}
+
+fn collect_font_macro_string_chars(
+    source: &str,
+    macro_name: &str,
+    font_name: &str,
+    chars: &mut BTreeSet<char>,
+) {
+    let mut remaining = source;
+    while let Some(index) = remaining.find(macro_name) {
+        remaining = &remaining[index + macro_name.len()..];
+        let Some(open_index) = remaining.find('(') else {
+            break;
+        };
+        remaining = &remaining[open_index + 1..];
+        let trimmed = remaining.trim_start();
+        let Some((macro_font_name, after_font_index)) = parse_ident(trimmed) else {
+            continue;
+        };
+        let after_font = trimmed[after_font_index..].trim_start();
+        let Some(after_comma) = after_font.strip_prefix(',') else {
+            continue;
+        };
+        let Some((literal, next_index)) = parse_next_string_literal(after_comma) else {
+            continue;
+        };
+        if macro_font_name == font_name {
+            chars.extend(literal.chars());
+        }
+        remaining = &after_comma[next_index..];
+    }
+}
+
+fn parse_ident(source: &str) -> Option<(&str, usize)> {
+    let mut end = 0;
+    for (index, ch) in source.char_indices() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0).then_some((&source[..end], end))
 }
 
 fn parse_next_string_literal(source: &str) -> Option<(String, usize)> {

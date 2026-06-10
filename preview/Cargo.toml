@@ -1,0 +1,11 @@
+[package]
+name = "monitor-preview"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[dependencies]
+png = "0.17"
+
+[build-dependencies]
+fontdue = "0.9"

@@ -2,7 +2,7 @@ use std::mem::{discriminant, take};
 use std::time::{Duration, Instant};
 
 use crate::app::ui::{
-    color, logical_rect_to_physical_area, Color, Rect, TextAlign, UiCanvas, UI_WIDTH,
+    color, logical_rect_to_physical_area, Color, FontFace, Rect, TextAlign, UiCanvas, UI_WIDTH,
 };
 use crate::drivers::display::{EspResult, Sh8601};
 
@@ -79,17 +79,18 @@ impl Scene {
 
 #[derive(Clone, PartialEq)]
 pub enum UiObject {
-    Rect(RectObject),
+    RoundedRect(RoundedRectObject),
     Text(TextObject),
-    Meter(MeterObject),
-    MeterFill(MeterFillObject),
+    PixelArt(PixelArtObject),
+    RoundedMeterFill(RoundedMeterFillObject),
     LoadingDots(LoadingDotsObject),
 }
 
 impl UiObject {
-    pub fn rect(x: i32, y: i32, w: i32, h: i32, color: Color) -> Self {
-        Self::Rect(RectObject {
+    pub fn rounded_rect(x: i32, y: i32, w: i32, h: i32, radius: i32, color: Color) -> Self {
+        Self::RoundedRect(RoundedRectObject {
             bounds: Rect::new(x, y, w, h),
+            radius,
             color,
         })
     }
@@ -103,39 +104,63 @@ impl UiObject {
         color: Color,
         align: TextAlign,
     ) -> Self {
+        Self::text_with_font(x, y, width, text, FontFace::DEFAULT, scale, color, align)
+    }
+
+    pub fn text_with_font(
+        x: i32,
+        y: i32,
+        width: i32,
+        text: impl Into<String>,
+        font: FontFace,
+        scale: i32,
+        color: Color,
+        align: TextAlign,
+    ) -> Self {
         Self::Text(TextObject {
             x,
             y,
             width,
             text: text.into(),
+            font,
             scale,
             color,
             align,
         })
     }
 
-    pub fn meter(
+    pub fn rounded_meter_fill(
         x: i32,
         y: i32,
         w: i32,
         h: i32,
         percent: u8,
+        radius: i32,
         fill_color: Color,
-        border_color: Color,
+        track_color: Color,
     ) -> Self {
-        Self::Meter(MeterObject {
+        Self::RoundedMeterFill(RoundedMeterFillObject {
             bounds: Rect::new(x, y, w, h),
             percent,
+            radius,
             fill_color,
-            border_color,
+            track_color,
         })
     }
 
-    pub fn meter_fill(x: i32, y: i32, w: i32, h: i32, percent: u8, fill_color: Color) -> Self {
-        Self::MeterFill(MeterFillObject {
-            bounds: Rect::new(x, y, w, h),
-            percent,
-            fill_color,
+    pub fn pixel_art(x: i32, y: i32, pixel: i32, rows: Vec<String>, color: Color) -> Self {
+        let width = rows
+            .iter()
+            .map(|row| row.chars().count())
+            .max()
+            .unwrap_or(0) as i32
+            * pixel;
+        let height = rows.len() as i32 * pixel;
+        Self::PixelArt(PixelArtObject {
+            bounds: Rect::new(x, y, width, height),
+            pixel,
+            rows,
+            color,
         })
     }
 
@@ -150,46 +175,34 @@ impl UiObject {
 
     fn draw(&self, ui: &mut UiCanvas<'_>, frame: u32) {
         match self {
-            Self::Rect(object) => ui.rect(
+            Self::RoundedRect(object) => ui.rounded_rect(
                 object.bounds.x,
                 object.bounds.y,
                 object.bounds.w,
                 object.bounds.h,
+                object.radius,
                 object.color,
             ),
-            Self::Text(object) => ui.text(
+            Self::Text(object) => ui.text_with_font(
                 object.x,
                 object.y,
                 object.width,
                 object.text.as_str(),
+                object.font,
                 object.scale,
                 object.color,
                 object.align,
             ),
-            Self::Meter(object) => {
-                ui.meter_shell(
-                    object.bounds.x,
-                    object.bounds.y,
-                    object.bounds.w,
-                    object.bounds.h,
-                    object.border_color,
-                );
-                ui.meter_fill(
-                    object.bounds.x + 4,
-                    object.bounds.y + 4,
-                    object.bounds.w - 8,
-                    object.bounds.h - 8,
-                    object.percent,
-                    object.fill_color,
-                );
-            }
-            Self::MeterFill(object) => ui.meter_fill(
+            Self::PixelArt(object) => object.draw(ui),
+            Self::RoundedMeterFill(object) => ui.rounded_meter_fill(
                 object.bounds.x,
                 object.bounds.y,
                 object.bounds.w,
                 object.bounds.h,
                 object.percent,
+                object.radius,
                 object.fill_color,
+                object.track_color,
             ),
             Self::LoadingDots(object) => object.draw(ui, frame),
         }
@@ -197,10 +210,10 @@ impl UiObject {
 
     fn bounds(&self, frame: u32) -> Rect {
         match self {
-            Self::Rect(object) => object.bounds,
+            Self::RoundedRect(object) => object.bounds,
             Self::Text(object) => object.bounds(),
-            Self::Meter(object) => object.bounds,
-            Self::MeterFill(object) => object.bounds,
+            Self::PixelArt(object) => object.bounds,
+            Self::RoundedMeterFill(object) => object.bounds,
             Self::LoadingDots(object) => object.bounds(frame),
         }
         .clamp_to_screen()
@@ -226,8 +239,9 @@ impl UiObject {
 struct UiObjectKind(std::mem::Discriminant<UiObject>);
 
 #[derive(Clone, PartialEq)]
-pub struct RectObject {
+pub struct RoundedRectObject {
     bounds: Rect,
+    radius: i32,
     color: Color,
 }
 
@@ -237,6 +251,7 @@ pub struct TextObject {
     y: i32,
     width: i32,
     text: String,
+    font: FontFace,
     scale: i32,
     color: Color,
     align: TextAlign,
@@ -249,25 +264,45 @@ impl TextObject {
             self.x,
             self.y,
             self.width,
-            UiCanvas::text_height(self.scale, lines),
+            UiCanvas::text_height_for(self.font, self.scale, lines),
         )
         .expand(2)
     }
 }
 
 #[derive(Clone, PartialEq)]
-pub struct MeterObject {
+pub struct RoundedMeterFillObject {
     bounds: Rect,
     percent: u8,
+    radius: i32,
     fill_color: Color,
-    border_color: Color,
+    track_color: Color,
 }
 
 #[derive(Clone, PartialEq)]
-pub struct MeterFillObject {
+pub struct PixelArtObject {
     bounds: Rect,
-    percent: u8,
-    fill_color: Color,
+    pixel: i32,
+    rows: Vec<String>,
+    color: Color,
+}
+
+impl PixelArtObject {
+    fn draw(&self, ui: &mut UiCanvas<'_>) {
+        for (row_index, row) in self.rows.iter().enumerate() {
+            for (column_index, cell) in row.chars().enumerate() {
+                if cell == '1' {
+                    ui.rect(
+                        self.bounds.x + column_index as i32 * self.pixel,
+                        self.bounds.y + row_index as i32 * self.pixel,
+                        self.pixel,
+                        self.pixel,
+                        self.color,
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -331,32 +366,43 @@ impl Renderer {
     }
 
     pub fn tick(&mut self, panel: &Sh8601) -> EspResult {
-        let Some(scene) = self.scene.clone() else {
-            return Ok(());
-        };
+        let animated_dirty = {
+            let Some(scene) = self.scene.as_ref() else {
+                return Ok(());
+            };
 
-        if self.rendered_scene.as_ref() == Some(&scene) {
-            if let Some(interval) = scene.animation_interval() {
-                if self.last_frame.elapsed() >= interval {
-                    let previous = scene.animated_bounds(self.frame);
-                    self.frame = self.frame.wrapping_add(1);
-                    let current = scene.animated_bounds(self.frame);
-                    self.last_frame = Instant::now();
-                    if let Some(bounds) = previous.into_iter().chain(current).reduce(Rect::union) {
-                        self.mark_dirty(bounds);
+            if self.rendered_scene.as_ref() == Some(scene) {
+                scene.animation_interval().and_then(|interval| {
+                    if self.last_frame.elapsed() >= interval {
+                        let previous = scene.animated_bounds(self.frame);
+                        self.frame = self.frame.wrapping_add(1);
+                        let current = scene.animated_bounds(self.frame);
+                        self.last_frame = Instant::now();
+                        previous.into_iter().chain(current).reduce(Rect::union)
+                    } else {
+                        None
                     }
-                }
+                })
+            } else {
+                None
             }
+        };
+        if let Some(bounds) = animated_dirty {
+            self.mark_dirty(bounds);
         }
 
         if self.dirty.is_empty() {
             return Ok(());
         }
 
-        for dirty in take(&mut self.dirty) {
-            self.draw(panel, &scene, dirty)?;
+        let dirty_rects = take(&mut self.dirty);
+        let Some(scene) = self.scene.as_ref() else {
+            return Ok(());
+        };
+        for dirty in dirty_rects {
+            self.draw(panel, scene, dirty)?;
         }
-        self.rendered_scene = Some(scene);
+        self.rendered_scene.clone_from(&self.scene);
         Ok(())
     }
 

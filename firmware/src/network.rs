@@ -44,6 +44,8 @@ pub struct NetworkStatus {
 pub struct UsageSnapshot {
     pub providers: Vec<UsageProvider>,
     pub updated_at: String,
+    #[serde(default)]
+    pub updated_at_unix: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -52,10 +54,31 @@ pub struct UsageProvider {
     pub label: String,
     #[serde(default)]
     pub theme_color: Option<String>,
+    #[serde(default)]
+    pub theme: Option<UsageTheme>,
+    #[serde(default)]
+    pub pixel_art: Option<UsagePixelArt>,
     pub source: String,
     pub account: Option<String>,
     pub plan: Option<String>,
     pub windows: Vec<UsageWindow>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UsageTheme {
+    pub accent: String,
+    pub panel: String,
+    pub panel_soft: String,
+    pub primary_panel: String,
+    pub primary_panel_soft: String,
+    pub track: String,
+    pub pill: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UsagePixelArt {
+    pub color: String,
+    pub rows: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -64,6 +87,8 @@ pub struct UsageWindow {
     pub label: String,
     pub used_percent: u8,
     pub resets_at: Option<String>,
+    #[serde(default)]
+    pub resets_at_unix: Option<u64>,
     pub status: String,
 }
 

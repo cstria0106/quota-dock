@@ -6,12 +6,13 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-    HTTP_TIMEOUT, UsageCollector, UsageProvider, UsageRegistry, home_dir, local,
-    percent_from_value, read_json, unix_now, window,
+    HTTP_TIMEOUT, UsageCollector, UsagePixelArt, UsageProvider, UsageRegistry, UsageTheme,
+    home_dir, local, percent_from_value, read_json, unix_now, window,
 };
 
 pub const PROVIDER_ID: &str = "CLAUDE";
 const THEME_COLOR: &str = "#D97757";
+const PIXEL_ART_SIZE: usize = 32;
 
 pub struct ClaudeUsageCollector;
 
@@ -26,7 +27,8 @@ impl UsageCollector for ClaudeUsageCollector {
             Err(err) => local::estimate_provider(
                 PROVIDER_ID,
                 "CLAUDE",
-                THEME_COLOR,
+                claude_theme(),
+                claude_pixel_art(),
                 claude_log_roots(),
                 err,
             ),
@@ -81,16 +83,16 @@ fn fetch_claude_oauth_provider() -> Result<UsageProvider, String> {
         .json::<Value>()
         .map_err(|err| format!("decode Claude usage response: {err}"))?;
     let mut windows = Vec::new();
-    push_claude_window(&mut windows, &usage, "five_hour", "5h", "5H");
-    push_claude_window(&mut windows, &usage, "seven_day", "7d", "7D");
+    push_claude_window(&mut windows, &usage, "five_hour", "5h", "5h");
+    push_claude_window(&mut windows, &usage, "seven_day", "7d", "Week");
     push_claude_window(
         &mut windows,
         &usage,
         "seven_day_sonnet",
         "7d-sonnet",
-        "SONNET",
+        "Sonnet",
     );
-    push_claude_window(&mut windows, &usage, "seven_day_opus", "7d-opus", "OPUS");
+    push_claude_window(&mut windows, &usage, "seven_day_opus", "7d-opus", "Opus");
     if windows.is_empty() {
         return Err("Claude usage response has no quota windows".to_string());
     }
@@ -99,6 +101,8 @@ fn fetch_claude_oauth_provider() -> Result<UsageProvider, String> {
         id: PROVIDER_ID.to_string(),
         label: "CLAUDE".to_string(),
         theme_color: Some(THEME_COLOR.to_string()),
+        theme: Some(claude_theme()),
+        pixel_art: Some(claude_pixel_art()),
         source: "oauth".to_string(),
         account: None,
         plan: oauth
@@ -147,6 +151,25 @@ fn claude_log_roots() -> Vec<PathBuf> {
         home.join(".config").join("claude").join("projects"),
         home.join(".claude").join("projects"),
     ]
+}
+
+fn claude_theme() -> UsageTheme {
+    UsageTheme {
+        accent: THEME_COLOR.to_string(),
+        panel: "#1D1714".to_string(),
+        panel_soft: "#2A1E18".to_string(),
+        primary_panel: "#231912".to_string(),
+        primary_panel_soft: "#3A251A".to_string(),
+        track: "#3A2B25".to_string(),
+        pill: "#3B2B25".to_string(),
+    }
+}
+
+fn claude_pixel_art() -> UsagePixelArt {
+    UsagePixelArt {
+        color: THEME_COLOR.to_string(),
+        rows: vec!["1".repeat(PIXEL_ART_SIZE); PIXEL_ART_SIZE],
+    }
 }
 
 #[derive(Debug, Deserialize)]

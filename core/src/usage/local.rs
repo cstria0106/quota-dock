@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::{UsageProvider, window};
+use super::{UsagePixelArt, UsageProvider, UsageTheme, window};
 
 const FIVE_HOURS: Duration = Duration::from_secs(5 * 60 * 60);
 const SEVEN_DAYS: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -14,22 +14,26 @@ const MAX_JSONL_FILES: usize = 4_000;
 pub(super) fn estimate_provider(
     id: &str,
     label: &str,
-    theme_color: &str,
+    theme: UsageTheme,
+    pixel_art: UsagePixelArt,
     roots: Vec<PathBuf>,
     live_error: String,
 ) -> UsageProvider {
+    let theme_color = theme.accent.clone();
     let totals = scan_local_usage(&roots);
     if totals.files == 0 {
         return UsageProvider {
             id: id.to_string(),
             label: label.to_string(),
-            theme_color: Some(theme_color.to_string()),
+            theme_color: Some(theme_color),
+            theme: Some(theme),
+            pixel_art: Some(pixel_art),
             source: "unavailable".to_string(),
             account: None,
             plan: Some(short_error(&live_error)),
             windows: vec![
-                window("5h", "5H", 0, None, "error"),
-                window("7d", "7D", 0, None, "error"),
+                window("5h", "5h", 0, None, "error"),
+                window("7d", "Week", 0, None, "error"),
             ],
         };
     }
@@ -37,21 +41,23 @@ pub(super) fn estimate_provider(
     UsageProvider {
         id: id.to_string(),
         label: label.to_string(),
-        theme_color: Some(theme_color.to_string()),
+        theme_color: Some(theme_color),
+        theme: Some(theme),
+        pixel_art: Some(pixel_art),
         source: "local-estimate".to_string(),
         account: None,
         plan: Some(format!("{} files", totals.files)),
         windows: vec![
             window(
                 "5h",
-                "5H",
+                "5h",
                 estimate_percent(totals.five_hour_tokens, 1_000_000),
                 Some("rolling".to_string()),
                 "estimated",
             ),
             window(
                 "7d",
-                "7D",
+                "Week",
                 estimate_percent(totals.seven_day_tokens, 6_000_000),
                 Some("rolling".to_string()),
                 "estimated",
