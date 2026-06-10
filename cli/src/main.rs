@@ -22,7 +22,7 @@ const DEFAULT_PORT: &str = "COM3";
 #[cfg(not(windows))]
 const DEFAULT_PORT: &str = "/dev/ttyACM0";
 const DEFAULT_BAUD: u32 = 115_200;
-const DEFAULT_CONFIG_FILE: &str = "monitor.config.json";
+const DEFAULT_CONFIG_FILE: &str = "config.toml";
 const DEFAULT_APP_OFFSET: &str = "0x10000";
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 4;
 const SERIAL_OPEN_DELAY_MS: u64 = 500;
@@ -478,8 +478,8 @@ fn url(device_url: &str, path: &str) -> String {
 fn read_config_file(path: &Path) -> Result<MonitorConfig, String> {
     let contents =
         fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
-    let config: MonitorConfig = serde_json::from_str(&contents)
-        .map_err(|err| format!("parse {}: {err}", path.display()))?;
+    let config: MonitorConfig =
+        toml::from_str(&contents).map_err(|err| format!("parse {}: {err}", path.display()))?;
     if config.wifi.ssid.trim().is_empty() {
         return Err(format!("{} has an empty Wi-Fi SSID", path.display()));
     }
