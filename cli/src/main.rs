@@ -20,7 +20,8 @@ const DEFAULT_BAUD: u32 = 115_200;
 const DEFAULT_CONFIG_FILE: &str = "monitor.config.json";
 const DEFAULT_FIRMWARE_DIR: &str = "../firmware";
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 4;
-const SERIAL_OPEN_DELAY_MS: u64 = 4_500;
+const SERIAL_OPEN_DELAY_MS: u64 = 500;
+const SERIAL_RETRY_INTERVAL_MS: u64 = 500;
 
 #[derive(Parser)]
 #[command(
@@ -299,10 +300,10 @@ fn send_serial(
     request: &SerialRequest,
     timeout: Duration,
 ) -> Result<ApiResponse, String> {
-    match send_serial_once(port_name, baud, request, timeout, false) {
+    match send_serial_once(port_name, baud, request, timeout, true) {
         Ok(response) => Ok(response),
         Err(err) if err == "serial response timed out" => {
-            send_serial_once(port_name, baud, request, timeout, true)
+            send_serial_once(port_name, baud, request, timeout, false)
         }
         Err(err) => Err(err),
     }
@@ -328,13 +329,23 @@ fn send_serial_once(
     thread::sleep(Duration::from_millis(SERIAL_OPEN_DELAY_MS));
     let _ = port.clear(ClearBuffer::Input);
     let request = serde_json::to_string(request).map_err(|err| err.to_string())?;
-    writeln!(port, "{request}").map_err(|err| err.to_string())?;
-    port.flush().map_err(|err| err.to_string())?;
 
     let started = Instant::now();
+    let mut last_write = None;
     let mut line = Vec::new();
     let mut buffer = [0_u8; 64];
     while started.elapsed() < timeout {
+        if last_write
+            .map(|last_write: Instant| {
+                last_write.elapsed() >= Duration::from_millis(SERIAL_RETRY_INTERVAL_MS)
+            })
+            .unwrap_or(true)
+        {
+            writeln!(port, "{request}").map_err(|err| err.to_string())?;
+            port.flush().map_err(|err| err.to_string())?;
+            last_write = Some(Instant::now());
+        }
+
         match port.read(&mut buffer) {
             Ok(0) => thread::sleep(Duration::from_millis(50)),
             Ok(len) => {
