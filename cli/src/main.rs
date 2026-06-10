@@ -1,5 +1,6 @@
 mod usage;
 
+use std::borrow::Cow;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -8,8 +9,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
+use espflash::connection::{Connection, ResetAfterOperation, ResetBeforeOperation};
+use espflash::flasher::Flasher;
+use espflash::image_format::Segment;
+use espflash::target::{Chip, DefaultProgressCallback};
 use serde::{Deserialize, Serialize};
-use serialport::ClearBuffer;
+use serialport::{ClearBuffer, FlowControl, SerialPortType, UsbPortInfo};
 use usage::{ProviderSelection, UsageSnapshot};
 
 #[cfg(windows)]
@@ -18,7 +23,7 @@ const DEFAULT_PORT: &str = "COM3";
 const DEFAULT_PORT: &str = "/dev/ttyACM0";
 const DEFAULT_BAUD: u32 = 115_200;
 const DEFAULT_CONFIG_FILE: &str = "monitor.config.json";
-const DEFAULT_FIRMWARE_DIR: &str = "../firmware";
+const DEFAULT_APP_OFFSET: &str = "0x10000";
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 4;
 const SERIAL_OPEN_DELAY_MS: u64 = 500;
 const SERIAL_RETRY_INTERVAL_MS: u64 = 500;
@@ -44,15 +49,15 @@ struct Cli {
 enum Commands {
     Ports,
     Flash {
-        #[arg(long, default_value = DEFAULT_FIRMWARE_DIR)]
-        firmware_dir: PathBuf,
+        firmware_bin: PathBuf,
         #[arg(long)]
-        skip_build: bool,
+        bootloader_bin: PathBuf,
+        #[arg(long)]
+        partition_table_bin: PathBuf,
+        #[arg(long, default_value = DEFAULT_APP_OFFSET)]
+        offset: String,
     },
-    Reset {
-        #[arg(long, default_value = DEFAULT_FIRMWARE_DIR)]
-        firmware_dir: PathBuf,
-    },
+    Reset,
     Provision {
         #[arg(long, default_value = DEFAULT_CONFIG_FILE)]
         config: PathBuf,
@@ -119,15 +124,19 @@ fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
         Commands::Ports => list_ports(),
         Commands::Flash {
-            firmware_dir,
-            skip_build,
-        } => {
-            if !skip_build {
-                build(&firmware_dir)?;
-            }
-            flash(&firmware_dir, &cli.port)
-        }
-        Commands::Reset { firmware_dir } => reset_device(&firmware_dir, &cli.port),
+            firmware_bin,
+            bootloader_bin,
+            partition_table_bin,
+            offset,
+        } => flash_bin(
+            &firmware_bin,
+            &bootloader_bin,
+            &partition_table_bin,
+            &offset,
+            &cli.port,
+            cli.baud,
+        ),
+        Commands::Reset => reset_device(&cli.port, cli.baud),
         Commands::Provision { config } => {
             let credentials = read_config_file(&config)?.wifi;
             let response = send_serial(
@@ -201,97 +210,122 @@ fn list_ports() -> Result<(), String> {
     Ok(())
 }
 
-fn build(firmware_dir: &Path) -> Result<(), String> {
-    let status = Command::new("./scripts/build.sh")
-        .current_dir(firmware_dir)
-        .status()
-        .map_err(|err| format!("failed to run build script: {err}"))?;
-    if status.success() {
-        Ok(())
+fn flash_bin(
+    firmware_bin: &Path,
+    bootloader_bin: &Path,
+    partition_table_bin: &Path,
+    offset: &str,
+    port: &str,
+    baud: u32,
+) -> Result<(), String> {
+    if !firmware_bin.is_file() {
+        return Err(format!(
+            "firmware bin does not exist: {}",
+            firmware_bin.display()
+        ));
+    }
+    if !bootloader_bin.is_file() {
+        return Err(format!(
+            "bootloader bin does not exist: {}",
+            bootloader_bin.display()
+        ));
+    }
+    if !partition_table_bin.is_file() {
+        return Err(format!(
+            "partition table bin does not exist: {}",
+            partition_table_bin.display()
+        ));
+    }
+
+    let app_offset = parse_u32(offset)?;
+    let firmware = fs::read(firmware_bin)
+        .map_err(|err| format!("read firmware bin {}: {err}", firmware_bin.display()))?;
+    let bootloader = fs::read(bootloader_bin)
+        .map_err(|err| format!("read bootloader bin {}: {err}", bootloader_bin.display()))?;
+    let partition_table = fs::read(partition_table_bin).map_err(|err| {
+        format!(
+            "read partition table bin {}: {err}",
+            partition_table_bin.display()
+        )
+    })?;
+
+    let segments = [
+        Segment {
+            addr: app_offset,
+            data: Cow::Borrowed(firmware.as_slice()),
+        },
+        Segment {
+            addr: 0x0,
+            data: Cow::Borrowed(bootloader.as_slice()),
+        },
+        Segment {
+            addr: 0x8000,
+            data: Cow::Borrowed(partition_table.as_slice()),
+        },
+    ];
+    let mut flasher = connect_flasher(port, baud)?;
+    let mut progress = DefaultProgressCallback;
+    flasher
+        .write_bins_to_flash(&segments, &mut progress)
+        .map_err(|err| format!("flash failed: {err}"))
+}
+
+fn parse_u32(value: &str) -> Result<u32, String> {
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        u32::from_str_radix(hex, 16).map_err(|err| format!("invalid offset {value}: {err}"))
     } else {
-        Err(format!("build script exited with {status}"))
+        value
+            .parse::<u32>()
+            .map_err(|err| format!("invalid offset {value}: {err}"))
     }
 }
 
-fn flash(firmware_dir: &Path, port: &str) -> Result<(), String> {
-    let espflash = espflash_path(firmware_dir);
-    let partition_csv = firmware_dir.join("partitions.csv");
-    let partition_bin = firmware_dir.join("target").join("partition-table.bin");
-    let target_dir = firmware_dir
-        .join("target")
-        .join("xtensa-esp32s3-espidf")
-        .join("release");
-    let app = target_dir.join("agent-quota-monitor");
-    let bootloader = target_dir.join("bootloader.bin");
-
-    run_command(
-        Command::new(&espflash)
-            .arg("partition-table")
-            .arg("--to-binary")
-            .arg("--output")
-            .arg(&partition_bin)
-            .arg(&partition_csv),
-        "espflash partition-table",
-    )?;
-    run_command(
-        Command::new(&espflash)
-            .arg("flash")
-            .arg("--port")
-            .arg(port)
-            .arg(&app),
-        "espflash flash",
-    )?;
-    run_command(
-        Command::new(&espflash)
-            .arg("write-bin")
-            .arg("--port")
-            .arg(port)
-            .arg("0x0")
-            .arg(&bootloader),
-        "espflash write bootloader",
-    )?;
-    run_command(
-        Command::new(&espflash)
-            .arg("write-bin")
-            .arg("--port")
-            .arg(port)
-            .arg("0x8000")
-            .arg(&partition_bin),
-        "espflash write partition table",
-    )
-}
-
-fn reset_device(firmware_dir: &Path, port: &str) -> Result<(), String> {
-    let espflash = espflash_path(firmware_dir);
-    run_command(
-        Command::new(&espflash).arg("reset").arg("--port").arg(port),
-        "espflash reset",
-    )
-}
-
-fn espflash_path(firmware_dir: &Path) -> PathBuf {
-    let binary = if cfg!(windows) {
-        "espflash.exe"
-    } else {
-        "espflash"
+fn connect_flasher(port: &str, baud: u32) -> Result<Flasher, String> {
+    let port_info = serialport::available_ports()
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .find(|info| info.port_name == port);
+    let usb_info = match port_info.map(|info| info.port_type) {
+        Some(SerialPortType::UsbPort(info)) => info,
+        _ => UsbPortInfo {
+            vid: 0,
+            pid: 0,
+            serial_number: None,
+            manufacturer: None,
+            product: None,
+        },
     };
-    let local = firmware_dir.join(".tools").join("bin").join(binary);
-    if local.exists() {
-        local
-    } else {
-        PathBuf::from(binary)
-    }
+    let serial = serialport::new(port, 115_200)
+        .flow_control(FlowControl::None)
+        .open_native()
+        .map_err(|err| format!("open serial {port}: {err}"))?;
+    let connection = Connection::new(
+        serial,
+        usb_info,
+        ResetAfterOperation::HardReset,
+        ResetBeforeOperation::DefaultReset,
+        baud,
+    );
+    Flasher::connect(
+        connection,
+        true,
+        true,
+        true,
+        Some(Chip::Esp32s3),
+        Some(baud),
+    )
+    .map_err(|err| format!("connect flasher: {err}"))
 }
 
-fn run_command(command: &mut Command, label: &str) -> Result<(), String> {
-    let status = command
-        .status()
-        .map_err(|err| format!("failed to run {label}: {err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{label} exited with {status}"))
-    }
+fn reset_device(port: &str, baud: u32) -> Result<(), String> {
+    let mut flasher = connect_flasher(port, baud)?;
+    flasher
+        .connection()
+        .reset()
+        .map_err(|err| format!("reset device: {err}"))
 }
 
 fn send_serial(
