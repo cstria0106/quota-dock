@@ -1,6 +1,8 @@
 use crate::app::renderer::{Scene, UiObject};
 use crate::app::status::waiting_scene;
-use crate::app::ui::{color, rgb565, Color, FontFace, TextAlign, UiCanvas, UI_HEIGHT, UI_WIDTH};
+use crate::app::ui::{
+    color, rgb565, Color, FontFace, Rect, TextAlign, UiCanvas, UI_HEIGHT, UI_WIDTH,
+};
 use crate::network::{UsagePixelArt, UsageProvider, UsageSnapshot, UsageWindow};
 
 const SCREEN_PAD_X: i32 = 20;
@@ -19,9 +21,8 @@ const USAGE_PILL_RADIUS: i32 = 6;
 const USAGE_PILL_TEXT_PAD_X: i32 = 5;
 const PROGRESS_H: i32 = 12;
 const PROGRESS_RADIUS: i32 = 3;
-const PRIMARY_PROGRESS_OFFSET_Y: i32 = 3;
-const SECONDARY_PROGRESS_OFFSET_Y: i32 = -1;
 const RESET_SCALE: i32 = 2;
+const PRIMARY_CONTENT_MIN_H: i32 = 96;
 const PRIMARY_ART_SIZE: i32 = 96;
 const MAX_PROVIDER_IMAGE_SIDE: usize = PRIMARY_ART_SIZE as usize;
 const MAX_CACHED_PROVIDER_IMAGES: usize = 6;
@@ -216,15 +217,14 @@ fn push_usage_layout(
     let x = SCREEN_PAD_X;
     let width = UI_WIDTH as i32 - SCREEN_PAD_X * 2;
     let screen_h = UI_HEIGHT as i32;
-    let primary_h = primary_panel_height(pixel_art, windows[0], current_unix);
+    let primary_h = primary_panel_height(pixel_art, windows[0]);
 
     if windows.len() == 1 {
         let card_h = primary_h;
-        let card_y = (screen_h - card_h) / 2;
         push_primary_panel(
             scene,
             x,
-            card_y,
+            single_panel_y(card_h, screen_h),
             width,
             card_h,
             pixel_art,
@@ -235,9 +235,8 @@ fn push_usage_layout(
         return;
     }
 
-    let secondary_h = secondary_panel_height(&windows[1..], current_unix);
-    let stack_h = primary_h + PANEL_GAP + secondary_h;
-    let y = (screen_h - stack_h).max(0) / 2;
+    let secondary_h = secondary_panel_height(&windows[1..]);
+    let y = stack_y(primary_h, secondary_h, screen_h);
 
     push_primary_panel(
         scene,
@@ -263,7 +262,7 @@ fn push_usage_layout(
         return;
     }
 
-    let secondary_w = (width - SECONDARY_CARD_GAP) / 2;
+    let secondary_w = secondary_card_width(width);
     push_usage_card(
         scene,
         RectSpec::new(x, secondary_y, secondary_w, secondary_h),
@@ -306,7 +305,7 @@ fn push_primary_panel(
     ));
 
     let art_x = x + PRIMARY_PANEL_GUTTER_X + ROUNDED_RECT_EDGE_INSET;
-    let art_y = y + (height - PRIMARY_ART_SIZE) / 2;
+    let art_y = y + centered_offset(height, PRIMARY_ART_SIZE);
     let has_art = pixel_art.is_some();
     if let Some(pixel_art) = pixel_art {
         push_pixel_art(scene, pixel_art, art_x, art_y, PRIMARY_ART_SIZE);
@@ -318,16 +317,8 @@ fn push_primary_panel(
         x + PRIMARY_PANEL_GUTTER_X
     };
     let body_w = x + width - body_x - PRIMARY_PANEL_GUTTER_X;
-    let body_y = if has_art {
-        art_y
-    } else {
-        y + PRIMARY_ART_GUTTER_Y
-    };
-    let body_h = if has_art {
-        PRIMARY_ART_SIZE
-    } else {
-        height - PRIMARY_ART_GUTTER_Y * 2
-    };
+    let body_h = primary_content_height();
+    let body_y = y + centered_offset(height, body_h);
 
     push_usage_content(
         scene,
@@ -381,63 +372,34 @@ fn push_usage_content(
     let pill_font = FontFace::Galmuri7;
     let pill_h = USAGE_PILL_H;
     let pill_w = pill_width(window.label.as_str(), rect.w, pill_scale);
-    let percent_font = if primary {
-        FontFace::DEFAULT
-    } else {
-        FontFace::Galmuri7
-    };
-    let percent_scale = if primary { 3 } else { 2 };
-    let reset_font = if primary {
-        FontFace::DEFAULT
-    } else {
-        FontFace::Galmuri7
-    };
+    let percent_font = percent_font(primary);
+    let percent_scale = percent_scale(primary);
+    let reset_font = reset_font(primary);
     let reset_scale = RESET_SCALE;
+    let reset_slot_h = reset_slot_height(primary);
     let progress_h = PROGRESS_H;
-
-    let (pill_y, reset_y, progress_y) = if primary {
-        let pill_y = rect.y - ROUNDED_RECT_EDGE_INSET;
-        let reset_bottom_y = rect.y + rect.h;
-        let reset_y = reset_text.as_ref().map(|reset_text| {
-            align_text_ink_bottom(reset_bottom_y, reset_text.as_str(), reset_font, reset_scale)
-        });
-        let reset_line_y = reset_y.unwrap_or(reset_bottom_y);
-        let progress_y =
-            ((pill_y + pill_h + reset_line_y - progress_h) / 2).max(pill_y + pill_h + 4);
-        (pill_y, reset_y, progress_y)
+    let content_h = if primary {
+        primary_content_height()
     } else {
-        let reset_ink_h = reset_text
-            .as_deref()
-            .map(|reset_text| text_ink_height(reset_text, reset_font, reset_scale))
-            .unwrap_or_default();
-        let group_h =
-            pill_h + SECONDARY_CONTENT_GAP + progress_h + SECONDARY_CONTENT_GAP + reset_ink_h;
-        let group_y = rect.y + (rect.h - group_h).max(0) / 2;
-        let pill_y = group_y;
-        let progress_y = pill_y + pill_h + SECONDARY_CONTENT_GAP;
-        let reset_bottom_y = progress_y + progress_h + SECONDARY_CONTENT_GAP + reset_ink_h;
-        let reset_y = reset_text.as_ref().map(|reset_text| {
-            align_text_ink_bottom(reset_bottom_y, reset_text.as_str(), reset_font, reset_scale)
-        });
-        (pill_y, reset_y, progress_y)
+        secondary_content_height()
     };
-    let progress_y = progress_y
-        + if primary {
-            PRIMARY_PROGRESS_OFFSET_Y
-        } else {
-            SECONDARY_PROGRESS_OFFSET_Y
-        };
-    let percent_y = if primary {
-        align_text_ink_top(rect.y, percent_text.as_str(), percent_font, percent_scale)
-    } else {
-        align_text_ink_center(
-            pill_y,
-            pill_h,
-            percent_text.as_str(),
-            percent_font,
-            percent_scale,
-        )
-    };
+    let content_y = rect.y + centered_offset(rect.h, content_h);
+    let top_slot_h = top_slot_height(primary);
+    let top_slot_y = content_y;
+    let pill_y = top_slot_y + centered_offset(top_slot_h, pill_h);
+    let reset_slot_y = content_y + content_h - reset_slot_h;
+    let reset_bottom_y = reset_slot_y + reset_slot_h;
+    let reset_y = reset_text.as_ref().map(|reset_text| {
+        align_text_ink_bottom(reset_bottom_y, reset_text.as_str(), reset_font, reset_scale)
+    });
+    let progress_y = centered_between(top_slot_y + top_slot_h, reset_slot_y, progress_h);
+    let percent_y = align_text_ink_center(
+        top_slot_y,
+        top_slot_h,
+        percent_text.as_str(),
+        percent_font,
+        percent_scale,
+    );
 
     scene.push(UiObject::text_with_font(
         rect.x,
@@ -500,6 +462,7 @@ fn push_pixel_art(scene: &mut Scene, art: &PackedPixelArt, x: i32, y: i32, size:
     let start_x = x + (size - drawn_w) / 2;
     let start_y = y + (size - drawn_h) / 2;
     scene.push(UiObject::pixel_art(
+        Rect::new(x, y, size, size),
         start_x,
         start_y,
         pixel,
@@ -573,55 +536,80 @@ fn pill_width(label: &str, max_width: i32, scale: i32) -> i32 {
     width.clamp(48, max_width / 2)
 }
 
-fn secondary_panel_height(windows: &[&UsageWindow], current_unix: u64) -> i32 {
-    windows
-        .iter()
-        .map(|window| secondary_content_height(window, current_unix))
-        .max()
-        .unwrap_or_default()
-        + SECONDARY_PANEL_GUTTER_Y * 2
+fn single_panel_y(card_h: i32, screen_h: i32) -> i32 {
+    centered_offset(screen_h, card_h)
 }
 
-fn primary_panel_height(
-    pixel_art: Option<&PackedPixelArt>,
-    window: &UsageWindow,
-    current_unix: u64,
-) -> i32 {
-    if pixel_art.is_some() {
-        return PRIMARY_ART_SIZE + PRIMARY_ART_GUTTER_Y * 2;
-    }
-
-    primary_content_height(window, current_unix) + PRIMARY_ART_GUTTER_Y * 2
+fn stack_y(primary_h: i32, secondary_h: i32, screen_h: i32) -> i32 {
+    centered_offset(screen_h, primary_h + PANEL_GAP + secondary_h)
 }
 
-fn primary_content_height(window: &UsageWindow, current_unix: u64) -> i32 {
-    let percent_text = format!("{}%", window.used_percent);
-    let percent_ink_h = text_ink_height(percent_text.as_str(), FontFace::DEFAULT, 3);
-    let reset_ink_h = reset_label(window, current_unix)
-        .as_deref()
-        .map(|reset_text| text_ink_height(reset_text, FontFace::DEFAULT, RESET_SCALE))
-        .unwrap_or_default();
+fn secondary_card_width(width: i32) -> i32 {
+    (width - SECONDARY_CARD_GAP) / 2
+}
 
-    percent_ink_h.max(USAGE_PILL_H)
+fn secondary_panel_height(_windows: &[&UsageWindow]) -> i32 {
+    secondary_content_height() + SECONDARY_PANEL_GUTTER_Y * 2
+}
+
+fn primary_panel_height(_pixel_art: Option<&PackedPixelArt>, _window: &UsageWindow) -> i32 {
+    primary_content_height().max(PRIMARY_ART_SIZE) + PRIMARY_ART_GUTTER_Y * 2
+}
+
+fn primary_content_height() -> i32 {
+    metric_content_height(true).max(PRIMARY_CONTENT_MIN_H)
+}
+
+fn secondary_content_height() -> i32 {
+    metric_content_height(false)
+}
+
+fn metric_content_height(primary: bool) -> i32 {
+    top_slot_height(primary)
         + SECONDARY_CONTENT_GAP
         + PROGRESS_H
         + SECONDARY_CONTENT_GAP
-        + reset_ink_h
+        + reset_slot_height(primary)
 }
 
-fn secondary_content_height(window: &UsageWindow, current_unix: u64) -> i32 {
-    let reset_ink_h = reset_label(window, current_unix)
-        .as_deref()
-        .map(|reset_text| text_ink_height(reset_text, FontFace::Galmuri7, RESET_SCALE))
-        .unwrap_or_default();
-    USAGE_PILL_H + SECONDARY_CONTENT_GAP + PROGRESS_H + SECONDARY_CONTENT_GAP + reset_ink_h
+fn top_slot_height(primary: bool) -> i32 {
+    UiCanvas::text_height_for(percent_font(primary), percent_scale(primary), 1).max(USAGE_PILL_H)
 }
 
-fn align_text_ink_top(container_y: i32, text: &str, font: FontFace, text_scale: i32) -> i32 {
-    let Some((top, _)) = UiCanvas::text_ink_bounds_y(text, font, text_scale) else {
-        return container_y;
-    };
-    container_y - top
+fn percent_font(primary: bool) -> FontFace {
+    if primary {
+        FontFace::DEFAULT
+    } else {
+        FontFace::Galmuri7
+    }
+}
+
+fn percent_scale(primary: bool) -> i32 {
+    if primary {
+        3
+    } else {
+        2
+    }
+}
+
+fn reset_font(primary: bool) -> FontFace {
+    if primary {
+        FontFace::DEFAULT
+    } else {
+        FontFace::Galmuri7
+    }
+}
+
+fn reset_slot_height(primary: bool) -> i32 {
+    UiCanvas::text_height_for(reset_font(primary), RESET_SCALE, 1)
+}
+
+fn centered_offset(container: i32, child: i32) -> i32 {
+    (container - child).max(0) / 2
+}
+
+fn centered_between(top: i32, bottom: i32, height: i32) -> i32 {
+    top + centered_offset(bottom - top, height)
 }
 
 fn align_text_ink_bottom(
@@ -634,12 +622,6 @@ fn align_text_ink_bottom(
         return container_bottom - UiCanvas::text_height_for(font, text_scale, 1);
     };
     container_bottom - bottom
-}
-
-fn text_ink_height(text: &str, font: FontFace, text_scale: i32) -> i32 {
-    UiCanvas::text_ink_bounds_y(text, font, text_scale)
-        .map(|(top, bottom)| bottom - top)
-        .unwrap_or_else(|| UiCanvas::text_height_for(font, text_scale, 1))
 }
 
 fn align_text_ink_center(

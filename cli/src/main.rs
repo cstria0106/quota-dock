@@ -107,6 +107,10 @@ enum TestUsageScenario {
     Plain,
     Empty,
     Errors,
+    GreenDiagonal,
+    GreenChecker,
+    BlueFramed,
+    OrangeFramed,
 }
 
 fn main() {
@@ -384,6 +388,34 @@ fn test_usage_snapshot(scenario: TestUsageScenario, include_images: bool) -> Usa
             test_error_provider("CODEX", "CODEX", test_codex_theme()),
             test_error_provider("CLAUDE", "CLAUDE", test_claude_theme()),
         ],
+        TestUsageScenario::GreenDiagonal => vec![test_pattern_provider(
+            now,
+            "GREEN_DIAGONAL",
+            "GREEN DIAGONAL",
+            test_opencode_theme(),
+            include_images.then(|| diagonal_art("#18A77A", "#9AF0C8", 96)),
+        )],
+        TestUsageScenario::GreenChecker => vec![test_pattern_provider(
+            now,
+            "GREEN_CHECKER",
+            "GREEN CHECKER",
+            test_opencode_theme(),
+            include_images.then(|| checker_art("#18A77A", "#9AF0C8", 96)),
+        )],
+        TestUsageScenario::BlueFramed => vec![test_pattern_provider(
+            now,
+            "BLUE_FRAMED",
+            "BLUE FRAMED",
+            test_codex_theme(),
+            include_images.then(|| framed_art("#3B82F6", "#93C5FD", 96)),
+        )],
+        TestUsageScenario::OrangeFramed => vec![test_pattern_provider(
+            now,
+            "ORANGE_FRAMED",
+            "ORANGE FRAMED",
+            test_claude_theme(),
+            include_images.then(|| framed_art("#D97757", "#F3B49D", 96)),
+        )],
     };
 
     UsageSnapshot {
@@ -443,6 +475,25 @@ fn test_plain_provider(now: u64) -> UsageProvider {
         vec![
             test_window("5h", "5h", 42, now + 1_900),
             test_window("7d", "Week", 13, now + 7 * 86_400),
+        ],
+    )
+}
+
+fn test_pattern_provider(
+    now: u64,
+    id: &str,
+    label: &str,
+    theme: UsageTheme,
+    pixel_art: Option<UsagePixelArt>,
+) -> UsageProvider {
+    test_provider(
+        id,
+        label,
+        theme,
+        pixel_art,
+        vec![
+            test_window("5h", "5h", 29, now + 2 * 3_600 + 22 * 60),
+            test_window("7d", "Week", 4, now + 6 * 86_400 + 19 * 3_600),
         ],
     )
 }

@@ -27,7 +27,7 @@ const LCD_RST: c_int = 21;
 pub const LCD_H_RES: usize = 280;
 pub const LCD_V_RES: usize = 456;
 const LCD_X_OFFSET: i32 = 0x14;
-const ROWS_PER_CHUNK: usize = 24;
+const ROWS_PER_CHUNK: usize = 64;
 
 const ESP_OK: EspErr = 0;
 const ESP_ERR_NO_MEM: EspErr = 0x101;

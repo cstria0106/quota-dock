@@ -2,7 +2,8 @@ use std::mem::{discriminant, take};
 use std::time::{Duration, Instant};
 
 use crate::app::ui::{
-    color, logical_rect_to_physical_area, Color, FontFace, Rect, TextAlign, UiCanvas, UI_WIDTH,
+    color, logical_rect_to_physical_area, physical_area_to_logical_rect, Color, FontFace, Rect,
+    TextAlign, UiCanvas, UI_WIDTH,
 };
 use crate::drivers::display::{EspResult, Sh8601};
 
@@ -149,8 +150,9 @@ impl UiObject {
     }
 
     pub fn pixel_art(
-        x: i32,
-        y: i32,
+        bounds: Rect,
+        draw_x: i32,
+        draw_y: i32,
         pixel: i32,
         width: i32,
         height: i32,
@@ -158,7 +160,9 @@ impl UiObject {
         palette: Vec<Color>,
     ) -> Self {
         Self::PixelArt(PixelArtObject {
-            bounds: Rect::new(x, y, width * pixel, height * pixel),
+            bounds,
+            draw_x,
+            draw_y,
             pixel,
             width,
             height,
@@ -285,6 +289,8 @@ pub struct RoundedMeterFillObject {
 #[derive(Clone, PartialEq)]
 pub struct PixelArtObject {
     bounds: Rect,
+    draw_x: i32,
+    draw_y: i32,
     pixel: i32,
     width: i32,
     height: i32,
@@ -306,8 +312,8 @@ impl PixelArtObject {
                 }
                 if let Some(color) = self.palette.get((*cell - 1) as usize) {
                     ui.rect(
-                        self.bounds.x + column_index as i32 * self.pixel,
-                        self.bounds.y + row_index as i32 * self.pixel,
+                        self.draw_x + column_index as i32 * self.pixel,
+                        self.draw_y + row_index as i32 * self.pixel,
                         self.pixel,
                         self.pixel,
                         *color,
@@ -440,8 +446,9 @@ impl Renderer {
             area.h,
             |output, x, y, width, rows| {
                 let mut ui = UiCanvas::new_area(output, x, y, width, rows);
-                ui.dotted_background();
-                scene.draw_dirty(&mut ui, self.frame, dirty);
+                ui.background();
+                let chunk_dirty = physical_area_to_logical_rect(x, y, width, rows).unwrap_or(dirty);
+                scene.draw_dirty(&mut ui, self.frame, chunk_dirty);
             },
         )
     }

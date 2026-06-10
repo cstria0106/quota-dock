@@ -99,7 +99,6 @@ pub mod color {
     use super::{rgb565, Color};
 
     pub const BG: Color = rgb565(16, 18, 24);
-    pub const BG_DOT: Color = rgb565(22, 25, 33);
     pub const PANEL_DIM: Color = rgb565(45, 48, 58);
     pub const TEXT: Color = rgb565(240, 238, 226);
     pub const MUTED: Color = rgb565(147, 151, 163);
@@ -219,17 +218,8 @@ impl<'a> UiCanvas<'a> {
         }
     }
 
-    pub fn dotted_background(&mut self) {
-        for row in 0..self.rows {
-            let physical_y = self.y_start + row;
-            for x_offset in 0..self.physical_width {
-                let physical_x = self.physical_x_start + x_offset;
-                let (x, y) = physical_to_logical(physical_x, physical_y);
-                let dot = (x + y) % 18 == 0;
-                self.output[row * self.physical_width + x_offset] =
-                    if dot { color::BG_DOT } else { color::BG };
-            }
-        }
+    pub fn background(&mut self) {
+        self.output.fill(color::BG);
     }
 
     pub fn text_height_for(font: FontFace, scale: i32, lines: usize) -> i32 {
@@ -371,10 +361,47 @@ impl<'a> UiCanvas<'a> {
             return;
         }
 
-        for py in y0..y1 {
-            for px in x0..x1 {
-                self.set_pixel(px, py, color);
+        if UI_LANDSCAPE_CLOCKWISE {
+            self.rect_landscape_clockwise(x0, y0, x1, y1, color);
+            return;
+        }
+
+        for row in y0 as usize..y1 as usize {
+            if row < self.y_start || row >= self.y_start + self.rows {
+                continue;
             }
+            let target_y = row - self.y_start;
+            let start = target_y * self.physical_width;
+            let x0 = (x0 as usize).max(self.physical_x_start);
+            let x1 = (x1 as usize).min(self.physical_x_start + self.physical_width);
+            if x0 >= x1 {
+                continue;
+            }
+            let start = start + x0 - self.physical_x_start;
+            self.output[start..start + x1 - x0].fill(color);
+        }
+    }
+
+    fn rect_landscape_clockwise(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: Color) {
+        let physical_x0 = y0 as usize;
+        let physical_x1 = y1 as usize;
+        let physical_y0 = PHYSICAL_V_RES - x1 as usize;
+        let physical_y1 = PHYSICAL_V_RES - x0 as usize;
+
+        let x0 = physical_x0.max(self.physical_x_start);
+        let x1 = physical_x1.min(self.physical_x_start + self.physical_width);
+        let y0 = physical_y0.max(self.y_start);
+        let y1 = physical_y1.min(self.y_start + self.rows);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+
+        let col = x0 - self.physical_x_start;
+        let width = x1 - x0;
+        for row in y0..y1 {
+            let row = row - self.y_start;
+            let start = row * self.physical_width + col;
+            self.output[start..start + width].fill(color);
         }
     }
 
@@ -393,32 +420,26 @@ impl<'a> UiCanvas<'a> {
             return;
         }
 
-        let left_center = x + radius;
-        let right_center = x + w - radius - 1;
-        let top_center = y + radius;
-        let bottom_center = y + h - radius - 1;
-        let threshold = radius * radius - radius;
+        self.rect(x + radius, y, w - radius * 2, h, color);
+        self.rect(x, y + radius, radius, h - radius * 2, color);
+        self.rect(x + w - radius, y + radius, radius, h - radius * 2, color);
 
-        for py in y0..y1 {
-            for px in x0..x1 {
-                let cx = if px < left_center {
-                    left_center
-                } else if px > right_center {
-                    right_center
-                } else {
-                    px
-                };
-                let cy = if py < top_center {
-                    top_center
-                } else if py > bottom_center {
-                    bottom_center
-                } else {
-                    py
-                };
-                let dx = px - cx;
-                let dy = py - cy;
-                if dx * dx + dy * dy <= threshold {
-                    self.set_pixel(px, py, color);
+        let threshold = radius * radius - radius;
+        let corner_offsets = [
+            (x + radius, y + radius),
+            (x + w - radius - 1, y + radius),
+            (x + radius, y + h - radius - 1),
+            (x + w - radius - 1, y + h - radius - 1),
+        ];
+
+        for (cx, cy) in corner_offsets {
+            for py in (cy - radius)..=(cy + radius) {
+                for px in (cx - radius)..=(cx + radius) {
+                    let dx = px - cx;
+                    let dy = py - cy;
+                    if dx * dx + dy * dy <= threshold {
+                        self.set_pixel(px, py, color);
+                    }
                 }
             }
         }
@@ -440,8 +461,14 @@ impl<'a> UiCanvas<'a> {
     }
 
     fn set_pixel(&mut self, x: i32, y: i32, color: Color) {
-        let Some((physical_x, physical_y)) = logical_to_physical(x, y) else {
+        if x < 0 || y < 0 || x >= UI_WIDTH as i32 || y >= UI_HEIGHT as i32 {
             return;
+        }
+
+        let (physical_x, physical_y) = if UI_LANDSCAPE_CLOCKWISE {
+            (y as usize, PHYSICAL_V_RES - 1 - x as usize)
+        } else {
+            (x as usize, y as usize)
         };
         if physical_y < self.y_start || physical_y >= self.y_start + self.rows {
             return;
@@ -487,6 +514,39 @@ pub fn logical_rect_to_physical_area(rect: Rect) -> Option<PhysicalArea> {
     })
 }
 
+pub fn physical_area_to_logical_rect(
+    physical_x: usize,
+    physical_y: usize,
+    physical_width: usize,
+    physical_height: usize,
+) -> Option<Rect> {
+    if physical_width == 0 || physical_height == 0 {
+        return None;
+    }
+
+    if UI_LANDSCAPE_CLOCKWISE {
+        return Some(
+            Rect::new(
+                (PHYSICAL_V_RES - physical_y - physical_height) as i32,
+                physical_x as i32,
+                physical_height as i32,
+                physical_width as i32,
+            )
+            .clamp_to_screen(),
+        );
+    }
+
+    Some(
+        Rect::new(
+            physical_x as i32,
+            physical_y as i32,
+            physical_width as i32,
+            physical_height as i32,
+        )
+        .clamp_to_screen(),
+    )
+}
+
 fn logical_to_physical(x: i32, y: i32) -> Option<(usize, usize)> {
     if x < 0 || y < 0 || x >= UI_WIDTH as i32 || y >= UI_HEIGHT as i32 {
         return None;
@@ -498,14 +558,6 @@ fn logical_to_physical(x: i32, y: i32) -> Option<(usize, usize)> {
         Some((y, PHYSICAL_V_RES - 1 - x))
     } else {
         Some((x, y))
-    }
-}
-
-fn physical_to_logical(physical_x: usize, physical_y: usize) -> (usize, usize) {
-    if UI_LANDSCAPE_CLOCKWISE {
-        (PHYSICAL_V_RES - 1 - physical_y, physical_x)
-    } else {
-        (physical_x, physical_y)
     }
 }
 
