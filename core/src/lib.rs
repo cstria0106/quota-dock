@@ -27,7 +27,7 @@ pub enum DeviceCommand {
     CycleUsageProvider,
 }
 
-pub use config::{FlashConfig, FlashInputs, MonitorConfig, WifiCredentials};
+pub use config::{BoardConfig, FlashConfig, FlashInputs, MonitorConfig, WifiCredentials};
 pub use serial::SerialRequest;
 pub use usage::{
     ProviderSelection, UsageCollector, UsageProvider, UsageRegistry, UsageSnapshot, UsageWindow,

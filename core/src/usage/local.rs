@@ -170,7 +170,7 @@ fn estimate_percent(tokens: u64, denominator: u64) -> u8 {
     if tokens == 0 {
         return 0;
     }
-    ((tokens.saturating_mul(100) / denominator).max(1).min(100)) as u8
+    (tokens.saturating_mul(100) / denominator).clamp(1, 100) as u8
 }
 
 fn short_error(error: &str) -> String {

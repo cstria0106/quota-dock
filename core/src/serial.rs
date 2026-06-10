@@ -85,10 +85,10 @@ fn send_serial_once(
                     if *byte == b'\n' {
                         if let Ok(text) = std::str::from_utf8(&line) {
                             let text = text.trim();
-                            if text.starts_with('{') {
-                                if let Ok(response) = serde_json::from_str::<ApiResponse>(text) {
-                                    return Ok(response);
-                                }
+                            if text.starts_with('{')
+                                && let Ok(response) = serde_json::from_str::<ApiResponse>(text)
+                            {
+                                return Ok(response);
                             }
                         }
                         line.clear();

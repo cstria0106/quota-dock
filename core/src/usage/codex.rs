@@ -57,10 +57,10 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
         .bearer_auth(access_token.trim())
         .header(ACCEPT, "application/json")
         .header(USER_AGENT, "monitor-cli");
-    if let Some(account_id) = auth.tokens.and_then(|tokens| tokens.account_id) {
-        if !account_id.trim().is_empty() {
-            request = request.header("ChatGPT-Account-Id", account_id);
-        }
+    if let Some(account_id) = auth.tokens.and_then(|tokens| tokens.account_id)
+        && !account_id.trim().is_empty()
+    {
+        request = request.header("ChatGPT-Account-Id", account_id);
     }
 
     let response = request.send().map_err(|err| err.to_string())?;
