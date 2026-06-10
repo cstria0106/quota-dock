@@ -34,6 +34,9 @@ cd "$ROOT_DIR"
 if [[ ! -x "$ROOT_DIR/.tools/bin/ldproxy" ]]; then
     cargo install ldproxy --root "$ROOT_DIR/.tools"
 fi
+if [[ ! -x "$ROOT_DIR/.tools/bin/espflash" ]]; then
+    cargo install espflash --root "$ROOT_DIR/.tools"
+fi
 export PATH="$ROOT_DIR/.tools/bin:$PATH"
 
 PARTITION_DEFAULTS_CONTENT=$(cat <<EOF
@@ -63,3 +66,28 @@ fi
 source "$LOCAL_IDF_PATH/export.sh"
 
 cargo +esp build --release
+
+FLASH_DIR="$ROOT_DIR/target/flash"
+RELEASE_DIR="$ROOT_DIR/target/xtensa-esp32s3-espidf/release"
+APP_ELF="$RELEASE_DIR/agent-quota-monitor"
+APP_BIN="$FLASH_DIR/app.bin"
+BOOTLOADER_BIN="$RELEASE_DIR/bootloader.bin"
+PARTITION_TABLE_BIN="$FLASH_DIR/partition-table.bin"
+
+mkdir -p "$FLASH_DIR"
+"$ROOT_DIR/.tools/bin/espflash" partition-table \
+    --to-binary \
+    --output "$PARTITION_TABLE_BIN" \
+    "$ROOT_DIR/partitions.csv" >/dev/null
+"$ROOT_DIR/.tools/bin/espflash" save-image \
+    --chip esp32s3 \
+    --flash-size 16mb \
+    --flash-mode qio \
+    --flash-freq 80mhz \
+    --partition-table "$ROOT_DIR/partitions.csv" \
+    --bootloader "$BOOTLOADER_BIN" \
+    "$APP_ELF" \
+    "$APP_BIN" >/dev/null
+cp "$BOOTLOADER_BIN" "$FLASH_DIR/bootloader.bin"
+
+printf "Flash binaries written to %s\n" "$FLASH_DIR"

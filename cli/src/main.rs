@@ -49,13 +49,15 @@ struct Cli {
 enum Commands {
     Ports,
     Flash {
-        firmware_bin: PathBuf,
+        firmware_bin: Option<PathBuf>,
+        #[arg(long, default_value = DEFAULT_CONFIG_FILE)]
+        config: PathBuf,
         #[arg(long)]
-        bootloader_bin: PathBuf,
+        bootloader_bin: Option<PathBuf>,
         #[arg(long)]
-        partition_table_bin: PathBuf,
-        #[arg(long, default_value = DEFAULT_APP_OFFSET)]
-        offset: String,
+        partition_table_bin: Option<PathBuf>,
+        #[arg(long)]
+        offset: Option<String>,
     },
     Reset,
     Provision {
@@ -125,20 +127,35 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::Ports => list_ports(),
         Commands::Flash {
             firmware_bin,
+            config,
             bootloader_bin,
             partition_table_bin,
             offset,
-        } => flash_bin(
-            &firmware_bin,
-            &bootloader_bin,
-            &partition_table_bin,
-            &offset,
-            &cli.port,
-            cli.baud,
-        ),
+        } => {
+            let inputs = resolve_flash_inputs(
+                &config,
+                firmware_bin,
+                bootloader_bin,
+                partition_table_bin,
+                offset,
+            )?;
+            flash_bin(
+                &inputs.firmware_bin,
+                &inputs.bootloader_bin,
+                &inputs.partition_table_bin,
+                &inputs.offset,
+                &cli.port,
+                cli.baud,
+            )
+        }
         Commands::Reset => reset_device(&cli.port, cli.baud),
         Commands::Provision { config } => {
-            let credentials = read_config_file(&config)?.wifi;
+            let credentials = read_config_file(&config)?
+                .wifi
+                .ok_or_else(|| format!("{} has no [wifi] section", config.display()))?;
+            if credentials.ssid.trim().is_empty() {
+                return Err(format!("{} has an empty Wi-Fi SSID", config.display()));
+            }
             let response = send_serial(
                 &cli.port,
                 cli.baud,
@@ -208,6 +225,75 @@ fn list_ports() -> Result<(), String> {
         println!("{}", port.port_name);
     }
     Ok(())
+}
+
+fn resolve_flash_inputs(
+    config_path: &Path,
+    firmware_bin: Option<PathBuf>,
+    bootloader_bin: Option<PathBuf>,
+    partition_table_bin: Option<PathBuf>,
+    offset: Option<String>,
+) -> Result<FlashInputs, String> {
+    let config = if config_path.is_file() {
+        Some(read_config_file(config_path)?)
+    } else {
+        None
+    };
+    let flash_config = config.as_ref().and_then(|config| config.flash.as_ref());
+
+    let firmware_bin = flash_path(
+        "firmware bin",
+        firmware_bin,
+        flash_config.and_then(|flash| flash.firmware_bin.as_ref()),
+        config_path,
+    )?;
+    let bootloader_bin = flash_path(
+        "bootloader bin",
+        bootloader_bin,
+        flash_config.and_then(|flash| flash.bootloader_bin.as_ref()),
+        config_path,
+    )?;
+    let partition_table_bin = flash_path(
+        "partition table bin",
+        partition_table_bin,
+        flash_config.and_then(|flash| flash.partition_table_bin.as_ref()),
+        config_path,
+    )?;
+    let offset = offset
+        .or_else(|| flash_config.and_then(|flash| flash.offset.clone()))
+        .unwrap_or_else(|| DEFAULT_APP_OFFSET.to_string());
+
+    Ok(FlashInputs {
+        firmware_bin,
+        bootloader_bin,
+        partition_table_bin,
+        offset,
+    })
+}
+
+fn flash_path(
+    label: &str,
+    cli_path: Option<PathBuf>,
+    config_path_value: Option<&PathBuf>,
+    config_file: &Path,
+) -> Result<PathBuf, String> {
+    if let Some(path) = cli_path {
+        return Ok(path);
+    }
+    let path = config_path_value.ok_or_else(|| {
+        format!(
+            "missing {label}; pass it on the command line or set [flash] in {}",
+            config_file.display()
+        )
+    })?;
+    if path.is_absolute() {
+        Ok(path.clone())
+    } else {
+        Ok(config_file
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(path))
+    }
 }
 
 fn flash_bin(
@@ -480,9 +566,6 @@ fn read_config_file(path: &Path) -> Result<MonitorConfig, String> {
         fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
     let config: MonitorConfig =
         toml::from_str(&contents).map_err(|err| format!("parse {}: {err}", path.display()))?;
-    if config.wifi.ssid.trim().is_empty() {
-        return Err(format!("{} has an empty Wi-Fi SSID", path.display()));
-    }
     Ok(config)
 }
 
@@ -531,11 +614,27 @@ fn to_provider_selection(provider: UsageProviderArg) -> ProviderSelection {
 
 #[derive(Debug, Deserialize)]
 struct MonitorConfig {
-    wifi: WifiCredentials,
+    wifi: Option<WifiCredentials>,
+    flash: Option<FlashConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 struct WifiCredentials {
     ssid: String,
     password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FlashConfig {
+    firmware_bin: Option<PathBuf>,
+    bootloader_bin: Option<PathBuf>,
+    partition_table_bin: Option<PathBuf>,
+    offset: Option<String>,
+}
+
+struct FlashInputs {
+    firmware_bin: PathBuf,
+    bootloader_bin: PathBuf,
+    partition_table_bin: PathBuf,
+    offset: String,
 }

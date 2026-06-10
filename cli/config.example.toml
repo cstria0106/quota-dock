@@ -1,3 +1,9 @@
 [wifi]
 ssid = "YOUR_WIFI_SSID"
 password = "YOUR_WIFI_PASSWORD"
+
+[flash]
+firmware_bin = "firmware/app.bin"
+bootloader_bin = "firmware/bootloader.bin"
+partition_table_bin = "firmware/partition-table.bin"
+offset = "0x10000"
