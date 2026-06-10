@@ -2,6 +2,10 @@ use crate::drivers::display::LCD_H_RES;
 
 pub type Color = u16;
 
+mod font {
+    include!(concat!(env!("OUT_DIR"), "/generated_font.rs"));
+}
+
 pub mod color {
     use super::{rgb565, Color};
 
@@ -19,6 +23,13 @@ pub mod color {
     pub const INK: Color = rgb565(35, 31, 32);
     pub const SHINE: Color = rgb565(255, 245, 202);
     pub const SWEAT: Color = rgb565(128, 225, 255);
+}
+
+#[derive(Clone, Copy)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
 }
 
 pub struct UiCanvas<'a> {
@@ -46,32 +57,82 @@ impl<'a> UiCanvas<'a> {
         }
     }
 
-    pub fn text(&mut self, x: i32, y: i32, text: &str, scale: i32, color: Color) {
+    pub fn text(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        text: &str,
+        scale: i32,
+        color: Color,
+        align: TextAlign,
+    ) {
+        let scale = scale.max(1);
+        let mut line_y = y;
+        for line in text.split('\n') {
+            let line_width = Self::text_line_width(line, scale);
+            let line_x = match align {
+                TextAlign::Left => x,
+                TextAlign::Center => x + (width - line_width) / 2,
+                TextAlign::Right => x + width - line_width,
+            };
+            self.text_line(line_x, line_y, line, scale, color);
+            line_y += font::LINE_HEIGHT as i32 * scale;
+        }
+    }
+
+    fn text_line(&mut self, x: i32, y: i32, text: &str, scale: i32, color: Color) {
         let mut cursor = x;
         for ch in text.chars() {
-            if ch == ' ' {
-                cursor += 4 * scale;
-                continue;
-            }
-            let glyph = glyph(ch.to_ascii_uppercase());
-            for (row, bits) in glyph.iter().enumerate() {
-                for col in 0..5 {
-                    if bits & (1 << (4 - col)) != 0 {
-                        self.rect(
-                            cursor + col * scale,
-                            y + row as i32 * scale,
-                            scale,
-                            scale,
-                            color,
-                        );
-                    }
-                }
-            }
-            cursor += 6 * scale;
+            self.glyph(cursor, y, ch, scale, color);
+            cursor += Self::glyph_advance(ch) * scale;
             if cursor > LCD_H_RES as i32 - 2 {
                 break;
             }
         }
+    }
+
+    fn glyph(&mut self, x: i32, y: i32, ch: char, scale: i32, color: Color) {
+        let Some(glyph) = font::glyph(ch).or_else(|| font::glyph('?')) else {
+            return;
+        };
+        if glyph.width == 0 || glyph.height == 0 || glyph.bitmap_len == 0 {
+            return;
+        }
+
+        let start = glyph.bitmap_offset as usize;
+        let end = start + glyph.bitmap_len as usize;
+        let bitmap = &font::BITMAP[start..end];
+        let origin_x = x + glyph.x_offset as i32 * scale;
+        let origin_y = y + glyph.y_offset as i32 * scale;
+
+        for row in 0..glyph.height as usize {
+            for col in 0..glyph.width as usize {
+                let bit_index = row * glyph.width as usize + col;
+                let byte = bitmap[bit_index / 8];
+                let mask = 1 << (7 - bit_index % 8);
+                if byte & mask != 0 {
+                    self.rect(
+                        origin_x + col as i32 * scale,
+                        origin_y + row as i32 * scale,
+                        scale,
+                        scale,
+                        color,
+                    );
+                }
+            }
+        }
+    }
+
+    fn text_line_width(text: &str, scale: i32) -> i32 {
+        text.chars().map(Self::glyph_advance).sum::<i32>() * scale
+    }
+
+    fn glyph_advance(ch: char) -> i32 {
+        font::glyph(ch)
+            .or_else(|| font::glyph('?'))
+            .map(|glyph| glyph.advance as i32)
+            .unwrap_or(font::FONT_SIZE as i32 / 2)
     }
 
     pub fn meter_shell(&mut self, x: i32, y: i32, w: i32, h: i32, border_color: Color) {
@@ -151,52 +212,4 @@ pub enum Mood {
 const fn rgb565(red: u8, green: u8, blue: u8) -> Color {
     let value = (((red as u16) & 0xF8) << 8) | (((green as u16) & 0xFC) << 3) | (blue as u16 >> 3);
     ((value & 0x00FF) << 8) | (value >> 8)
-}
-
-fn glyph(ch: char) -> [u8; 7] {
-    match ch {
-        'A' => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
-        'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
-        'C' => [0x0F, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0F],
-        'D' => [0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E],
-        'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
-        'F' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
-        'G' => [0x0F, 0x10, 0x10, 0x13, 0x11, 0x11, 0x0F],
-        'H' => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
-        'I' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F],
-        'J' => [0x1F, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0C],
-        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
-        'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
-        'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
-        'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
-        'O' => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
-        'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
-        'Q' => [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
-        'R' => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
-        'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
-        'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
-        'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
-        'V' => [0x11, 0x11, 0x11, 0x11, 0x0A, 0x0A, 0x04],
-        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11],
-        'X' => [0x11, 0x0A, 0x04, 0x04, 0x04, 0x0A, 0x11],
-        'Y' => [0x11, 0x0A, 0x04, 0x04, 0x04, 0x04, 0x04],
-        'Z' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
-        '0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
-        '1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
-        '2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
-        '3' => [0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E],
-        '4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
-        '5' => [0x1F, 0x10, 0x10, 0x1E, 0x01, 0x01, 0x1E],
-        '6' => [0x07, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E],
-        '7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
-        '8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
-        '9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x1C],
-        '%' => [0x19, 0x19, 0x02, 0x04, 0x08, 0x13, 0x13],
-        ':' => [0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00],
-        '-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
-        '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F],
-        '/' => [0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10],
-        '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C],
-        _ => [0x1F, 0x11, 0x15, 0x15, 0x15, 0x11, 0x1F],
-    }
 }

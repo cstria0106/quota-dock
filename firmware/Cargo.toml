@@ -28,3 +28,4 @@ esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys.git" }
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }
+fontdue = "0.9"
