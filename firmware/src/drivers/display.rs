@@ -39,6 +39,7 @@ const LCD_CMD_RASET: i32 = 0x2B;
 const LCD_CMD_RAMWR: i32 = 0x2C;
 const LCD_CMD_MADCTL: i32 = 0x36;
 const LCD_CMD_COLMOD: i32 = 0x3A;
+const LCD_CMD_NOP: i32 = 0x00;
 
 pub type EspErr = i32;
 pub type EspResult<T = ()> = Result<T, EspErr>;
@@ -254,11 +255,16 @@ impl Sh8601 {
         )?;
 
         let len = width as usize * rows as usize * size_of::<u16>();
-        self.tx_color(LCD_CMD_RAMWR, pixels.cast(), len)
+        self.tx_color(LCD_CMD_RAMWR, pixels.cast(), len)?;
+        self.wait_color_transfer()
     }
 
     fn tx_param(&self, command: i32, data: &[u8]) -> EspResult {
         self.tx_param_raw(qspi_command(command), data)
+    }
+
+    fn wait_color_transfer(&self) -> EspResult {
+        self.tx_param(LCD_CMD_NOP, &[])
     }
 
     fn tx_param_raw(&self, command: i32, data: &[u8]) -> EspResult {
