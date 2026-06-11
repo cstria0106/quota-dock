@@ -1,12 +1,12 @@
 use std::time::Instant;
 
-use monitor_core::StatusResponse;
+use quota_dock_core::StatusResponse;
 
 use crate::worker::{SyncReport, TaskResult};
 
-use super::{normalize_device_url, MonitorApp, SetupStep, WIFI_POLL_INTERVAL, WIFI_POLL_WINDOW};
+use super::{normalize_device_url, QuotaDockApp, SetupStep, WIFI_POLL_INTERVAL, WIFI_POLL_WINDOW};
 
-impl MonitorApp {
+impl QuotaDockApp {
     pub(super) fn process_results(&mut self) {
         for result in self.worker.drain() {
             match result {
@@ -30,7 +30,7 @@ impl MonitorApp {
                         Ok(status) => {
                             self.handle_device_status(status);
                             self.sync_enabled = true;
-                            self.current_step = SetupStep::Monitor;
+                            self.current_step = SetupStep::Dock;
                             self.sync_scheduler.request_now();
                         }
                         Err(err) => self.push_log(format!("device status failed: {err}")),
@@ -103,7 +103,7 @@ impl MonitorApp {
         }
     }
 
-    fn handle_send_wifi(&mut self, result: Result<monitor_core::ApiResponse, String>) {
+    fn handle_send_wifi(&mut self, result: Result<quota_dock_core::ApiResponse, String>) {
         self.wifi_running = false;
         match result {
             Ok(response) if response.ok => {
@@ -115,7 +115,7 @@ impl MonitorApp {
         }
     }
 
-    fn handle_clear_wifi(&mut self, result: Result<monitor_core::ApiResponse, String>) {
+    fn handle_clear_wifi(&mut self, result: Result<quota_dock_core::ApiResponse, String>) {
         self.clear_wifi_running = false;
         match result {
             Ok(response) if response.ok => {

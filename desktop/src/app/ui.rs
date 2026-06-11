@@ -1,8 +1,8 @@
 use eframe::egui;
 
-use super::{MonitorApp, SetupStep};
+use super::{QuotaDockApp, SetupStep};
 
-impl MonitorApp {
+impl QuotaDockApp {
     pub(super) fn step_nav(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             for step in SetupStep::all() {
@@ -186,7 +186,7 @@ impl MonitorApp {
                 .clicked()
             {
                 self.sync_enabled = true;
-                self.current_step = SetupStep::Monitor;
+                self.current_step = SetupStep::Dock;
                 self.sync_scheduler.request_now();
             }
         });

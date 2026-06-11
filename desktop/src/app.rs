@@ -1,5 +1,5 @@
 mod actions;
-mod monitor_ui;
+mod dock_ui;
 mod results;
 mod ui;
 
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use monitor_core::{StatusResponse, UsageSnapshot};
+use quota_dock_core::{StatusResponse, UsageSnapshot};
 
 use crate::firmware::{bundled_firmware, BundledFirmware};
 use crate::settings::{load_settings, DesktopSettings};
@@ -20,7 +20,7 @@ pub(super) const WIFI_POLL_WINDOW: Duration = Duration::from_secs(60);
 pub(super) const WIFI_POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub(super) const PROVIDER_IMAGES: &[(&str, &str)] = &[("codex", "Codex"), ("claude", "Claude")];
 
-pub struct MonitorApp {
+pub struct QuotaDockApp {
     settings: DesktopSettings,
     settings_path: PathBuf,
     worker: Worker,
@@ -51,7 +51,7 @@ pub struct MonitorApp {
     save_error: Option<String>,
 }
 
-impl MonitorApp {
+impl QuotaDockApp {
     pub fn new(_: &eframe::CreationContext<'_>) -> Self {
         let (settings, settings_path, settings_error) = load_settings();
         let mut app = Self {
@@ -92,13 +92,13 @@ impl MonitorApp {
     }
 }
 
-impl eframe::App for MonitorApp {
+impl eframe::App for QuotaDockApp {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         self.process_results();
         self.poll_wifi_status_if_due();
         self.sync_if_due();
 
-        ui.heading("CC Monitor");
+        ui.heading("QuotaDock");
         ui.add_space(6.0);
         self.step_nav(ui);
         ui.separator();
@@ -107,7 +107,7 @@ impl eframe::App for MonitorApp {
             SetupStep::Firmware => self.firmware_step(ui),
             SetupStep::Wifi => self.wifi_step(ui),
             SetupStep::Device => self.device_step(ui),
-            SetupStep::Monitor => self.monitor_step(ui),
+            SetupStep::Dock => self.dock_step(ui),
         }
         ui.separator();
         self.activity_log(ui);
@@ -122,7 +122,7 @@ enum SetupStep {
     Firmware,
     Wifi,
     Device,
-    Monitor,
+    Dock,
 }
 
 impl SetupStep {
@@ -132,7 +132,7 @@ impl SetupStep {
             Self::Firmware,
             Self::Wifi,
             Self::Device,
-            Self::Monitor,
+            Self::Dock,
         ]
     }
 
@@ -142,7 +142,7 @@ impl SetupStep {
             Self::Firmware => 1,
             Self::Wifi => 2,
             Self::Device => 3,
-            Self::Monitor => 4,
+            Self::Dock => 4,
         }
     }
 
@@ -152,7 +152,7 @@ impl SetupStep {
             Self::Firmware => "Firmware",
             Self::Wifi => "Wi-Fi",
             Self::Device => "Device",
-            Self::Monitor => "Monitor",
+            Self::Dock => "Dock",
         }
     }
 }

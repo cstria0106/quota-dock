@@ -71,7 +71,7 @@ fn fetch_claude_oauth_provider() -> Result<UsageProvider, String> {
         .header(ACCEPT, "application/json")
         .header(CONTENT_TYPE, "application/json")
         .header("anthropic-beta", "oauth-2025-04-20")
-        .header(USER_AGENT, "claude-code/2.1.0 monitor-cli")
+        .header(USER_AGENT, "claude-code/2.1.0 quota-dock-cli")
         .send()
         .map_err(|err| err.to_string())?;
     if !response.status().is_success() {

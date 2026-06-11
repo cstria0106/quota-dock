@@ -1,13 +1,13 @@
 use eframe::egui;
-use monitor_core::DeviceCommand;
+use quota_dock_core::DeviceCommand;
 
 use crate::settings::ProviderChoice;
 
-use super::{MonitorApp, PROVIDER_IMAGES};
+use super::{QuotaDockApp, PROVIDER_IMAGES};
 
-impl MonitorApp {
-    pub(super) fn monitor_step(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Monitor");
+impl QuotaDockApp {
+    pub(super) fn dock_step(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Dock");
         ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut self.sync_enabled, "Sync");
             ui.label("Interval");

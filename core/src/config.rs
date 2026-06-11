@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_APP_OFFSET: &str = "0x10000";
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct MonitorConfig {
+pub struct QuotaDockConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board: Option<BoardConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,7 +52,7 @@ pub struct FlashInputs {
     pub offset: String,
 }
 
-pub fn read_config_file(path: &Path) -> Result<MonitorConfig, String> {
+pub fn read_config_file(path: &Path) -> Result<QuotaDockConfig, String> {
     let contents =
         fs::read_to_string(path).map_err(|err| format!("read {}: {err}", path.display()))?;
     toml::from_str(&contents).map_err(|err| format!("parse {}: {err}", path.display()))
@@ -62,7 +62,7 @@ pub fn save_board_ip(path: &Path, ip: &str) -> Result<(), String> {
     let mut config = if path.is_file() {
         read_config_file(path)?
     } else {
-        MonitorConfig::default()
+        QuotaDockConfig::default()
     };
     config.board.get_or_insert_with(BoardConfig::default).ip = Some(ip.trim().to_string());
     write_config_file(path, &config)
@@ -155,7 +155,7 @@ fn flash_path(
     }
 }
 
-fn write_config_file(path: &Path, config: &MonitorConfig) -> Result<(), String> {
+fn write_config_file(path: &Path, config: &QuotaDockConfig) -> Result<(), String> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -214,11 +214,11 @@ mod tests {
     fn explicit_device_url_overrides_config() {
         let url = resolve_device_url(
             Path::new("missing.toml"),
-            Some("http://monitor.local".to_string()),
+            Some("http://quota-dock.local".to_string()),
         )
         .expect("explicit URL should resolve");
 
-        assert_eq!(url, "http://monitor.local");
+        assert_eq!(url, "http://quota-dock.local");
     }
 
     #[test]
@@ -252,6 +252,6 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("monitor-config-test-{nanos}"))
+        std::env::temp_dir().join(format!("quota-dock-config-test-{nanos}"))
     }
 }

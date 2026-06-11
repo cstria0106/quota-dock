@@ -654,6 +654,6 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("monitor-usage-test-{nanos}"))
+        std::env::temp_dir().join(format!("quota-dock-usage-test-{nanos}"))
     }
 }

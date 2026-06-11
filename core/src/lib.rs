@@ -32,7 +32,7 @@ pub enum DeviceCommand {
 }
 
 pub use config::{
-    BoardConfig, FlashConfig, FlashInputs, MonitorConfig, UsageConfig, WifiCredentials,
+    BoardConfig, FlashConfig, FlashInputs, QuotaDockConfig, UsageConfig, WifiCredentials,
 };
 pub use serial::SerialRequest;
 pub use usage::{

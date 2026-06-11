@@ -15,8 +15,8 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "CC Monitor",
+        "QuotaDock",
         options,
-        Box::new(|cc| Ok(Box::new(app::MonitorApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::QuotaDockApp::new(cc)))),
     )
 }

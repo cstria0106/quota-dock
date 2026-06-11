@@ -3,17 +3,17 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use monitor_core::config::{
+use quota_dock_core::config::{
     read_config_file, resolve_device_url, resolve_flash_inputs, save_board_ip,
 };
-use monitor_core::flash::{flash_firmware, reset_device};
-use monitor_core::http::{
+use quota_dock_core::flash::{flash_firmware, reset_device};
+use quota_dock_core::http::{
     http_command, http_status, http_usage, http_usage_provider, postcard_len,
 };
-use monitor_core::serial::{send_serial, send_serial_status, serial_port_names};
-use monitor_core::usage::UsageTheme;
-use monitor_core::usage::{attach_provider_images, collect_snapshot, strip_provider_images};
-use monitor_core::{
+use quota_dock_core::serial::{send_serial, send_serial_status, serial_port_names};
+use quota_dock_core::usage::UsageTheme;
+use quota_dock_core::usage::{attach_provider_images, collect_snapshot, strip_provider_images};
+use quota_dock_core::{
     ApiResponse, DeviceCommand, ProviderSelection, SerialRequest, StatusResponse, UsagePixelArt,
     UsageProvider, UsageProviderUpdate, UsageSnapshot, UsageWindow,
 };
@@ -30,7 +30,7 @@ const GAUGE_SWEEP_PATTERN: &[u8] = &[5, 25, 50, 75, 95, 75, 50, 25, 10, 40];
 #[command(
     author,
     version,
-    about = "Provision and control the monitor ESP32-S3 firmware"
+    about = "Provision and control the QuotaDock ESP32-S3 firmware"
 )]
 struct Cli {
     #[arg(long, default_value = DEFAULT_PORT, global = true)]

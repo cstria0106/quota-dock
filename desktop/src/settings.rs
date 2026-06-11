@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use monitor_core::ProviderSelection;
+use quota_dock_core::ProviderSelection;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SYNC_INTERVAL_SECS: u64 = 60;
@@ -106,7 +106,7 @@ pub fn save_to_path(path: &Path, settings: &DesktopSettings) -> Result<(), Strin
 fn settings_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join("cc-monitor")
+        .join("quota-dock")
         .join("desktop-settings.toml")
 }
 

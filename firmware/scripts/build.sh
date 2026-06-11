@@ -73,7 +73,7 @@ cargo "${cargo_args[@]}"
 
 FLASH_DIR="$ROOT_DIR/target/flash"
 RELEASE_DIR="$ROOT_DIR/target/xtensa-esp32s3-espidf/release"
-APP_ELF="$RELEASE_DIR/agent-quota-monitor"
+APP_ELF="$RELEASE_DIR/quota-dock-firmware"
 APP_BIN="$FLASH_DIR/app.bin"
 BOOTLOADER_BIN="$RELEASE_DIR/bootloader.bin"
 PARTITION_TABLE_BIN="$FLASH_DIR/partition-table.bin"

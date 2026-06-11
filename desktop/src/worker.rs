@@ -4,9 +4,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
-use monitor_core::http::{http_command, http_status, http_usage_provider, postcard_len};
-use monitor_core::serial::{send_serial, send_serial_status, serial_port_names};
-use monitor_core::{
+use quota_dock_core::http::{http_command, http_status, http_usage_provider, postcard_len};
+use quota_dock_core::serial::{send_serial, send_serial_status, serial_port_names};
+use quota_dock_core::{
     attach_provider_images, collect_snapshot, strip_provider_images, validate_provider_image,
     ApiResponse, DeviceCommand, ProviderSelection, SerialRequest, StatusResponse, UsagePixelArt,
     UsageProviderUpdate, UsageSnapshot,
@@ -96,7 +96,7 @@ impl Worker {
         let (task_tx, task_rx) = mpsc::channel::<Task>();
         let (result_tx, result_rx) = mpsc::channel::<TaskResult>();
         thread::Builder::new()
-            .name("monitor-desktop-worker".to_string())
+            .name("quota-dock-desktop-worker".to_string())
             .spawn(move || {
                 while let Ok(task) = task_rx.recv() {
                     let _ = result_tx.send(run_task(task));

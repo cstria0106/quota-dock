@@ -64,7 +64,7 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
         .get("https://chatgpt.com/backend-api/wham/usage")
         .bearer_auth(access_token.trim())
         .header(ACCEPT, "application/json")
-        .header(USER_AGENT, "monitor-cli");
+        .header(USER_AGENT, "quota-dock-cli");
     if let Some(account_id) = auth.tokens.and_then(|tokens| tokens.account_id)
         && !account_id.trim().is_empty()
     {

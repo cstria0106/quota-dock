@@ -1,5 +1,5 @@
 [package]
-name = "agent-quota-monitor"
+name = "quota-dock-firmware"
 version = "0.1.0"
 edition = "2021"
 resolver = "2"

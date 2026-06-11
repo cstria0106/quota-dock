@@ -1,5 +1,5 @@
-use monitor_core::config::DEFAULT_APP_OFFSET;
-use monitor_core::flash::{flash_firmware_images, FlashImages};
+use quota_dock_core::config::DEFAULT_APP_OFFSET;
+use quota_dock_core::flash::{flash_firmware_images, FlashImages};
 
 const APP_BIN: &[u8] = include_bytes!("../../firmware/target/flash/app.bin");
 const BOOTLOADER_BIN: &[u8] = include_bytes!("../../firmware/target/flash/bootloader.bin");

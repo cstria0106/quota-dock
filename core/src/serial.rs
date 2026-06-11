@@ -8,7 +8,7 @@ use serialport::ClearBuffer;
 
 use crate::{ApiResponse, DeviceCommand, StatusResponse};
 
-const SERIAL_FRAME_MAGIC: &[u8; 4] = b"MONP";
+const SERIAL_FRAME_MAGIC: &[u8; 4] = b"QDCK";
 const SERIAL_MAX_FRAME_BODY: usize = 64 * 1024;
 const SERIAL_OPEN_DELAY_MS: u64 = 500;
 const SERIAL_RETRY_INTERVAL_MS: u64 = 500;

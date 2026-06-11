@@ -246,15 +246,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "monitor-core",
- "serde_json",
-]
-
-[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1108,20 +1099,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "monitor-core"
-version = "0.1.0"
-dependencies = [
- "espflash",
- "image",
- "postcard",
- "reqwest",
- "serde",
- "serde_json",
- "serialport",
- "toml",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1343,6 +1320,29 @@ dependencies = [
  "socket2",
  "tracing",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "quota-dock-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "quota-dock-core",
+ "serde_json",
+]
+
+[[package]]
+name = "quota-dock-core"
+version = "0.1.0"
+dependencies = [
+ "espflash",
+ "image",
+ "postcard",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serialport",
+ "toml",
 ]
 
 [[package]]

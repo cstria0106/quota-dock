@@ -3,22 +3,6 @@
 version = 3
 
 [[package]]
-name = "agent-quota-monitor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "embedded-svc",
- "embuild",
- "esp-idf-svc",
- "esp-idf-sys",
- "fontdue",
- "heapless 0.9.3",
- "postcard",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1197,6 +1181,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "quota-dock-firmware"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "embedded-svc",
+ "embuild",
+ "esp-idf-svc",
+ "esp-idf-sys",
+ "fontdue",
+ "heapless 0.9.3",
+ "postcard",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

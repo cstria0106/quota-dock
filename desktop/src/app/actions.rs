@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use monitor_core::DeviceCommand;
+use quota_dock_core::DeviceCommand;
 
 use crate::settings::save_to_path;
 use crate::worker::Task;
 
-use super::{normalize_device_url, MonitorApp, SERIAL_BAUD};
+use super::{normalize_device_url, QuotaDockApp, SERIAL_BAUD};
 
-impl MonitorApp {
+impl QuotaDockApp {
     pub(super) fn refresh_ports(&mut self) {
         self.port_scan_running = true;
         if !self.queue(Task::RefreshPorts) {

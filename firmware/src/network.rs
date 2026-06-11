@@ -14,12 +14,12 @@ use serde::{Deserialize, Serialize};
 
 const MAX_FRAME_BODY: usize = 64 * 1024;
 const PROTOCOL_PORT: u16 = 3333;
-const SERIAL_FRAME_MAGIC: &[u8; 4] = b"MONP";
+const SERIAL_FRAME_MAGIC: &[u8; 4] = b"QDCK";
 const COMMAND_QUEUE_CAPACITY: usize = 8;
 const NETWORK_STACK_SIZE: usize = 24 * 1024;
 const PROTOCOL_STACK_SIZE: usize = 18 * 1024;
 const SERIAL_STACK_SIZE: usize = 24 * 1024;
-const NVS_NAMESPACE: &str = "monitor";
+const NVS_NAMESPACE: &str = "quota-dock";
 const NVS_WIFI_SSID: &str = "wifi_ssid";
 const NVS_WIFI_PASSWORD: &str = "wifi_pass";
 

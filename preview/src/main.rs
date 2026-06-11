@@ -161,11 +161,11 @@ fn render_provider(
         .ok_or_else(|| format!("unknown provider: {provider_id}"))?;
 
     let scene = usage_scene(snapshot, image_cache, selected_provider, 0);
-    let panel = Sh8601::new();
+    let mut panel = Sh8601::new();
     let mut renderer = Renderer::new();
     renderer.set_scene(scene);
     renderer
-        .tick(&panel)
+        .tick(&mut panel)
         .map_err(|err| format!("render: {err}"))?;
 
     let output = PathBuf::from("target/previews").join(format!(
