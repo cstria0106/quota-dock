@@ -88,7 +88,6 @@ impl QuotaDockApp {
     pub(super) fn clear_provider_image(&mut self, provider_id: &str) {
         self.settings.images.remove(provider_id);
         self.pending_image_clears.insert(provider_id.to_string());
-        self.send_images_next_sync = true;
         self.sync_scheduler.request_now();
         self.save_settings();
         self.push_log(format!("{provider_id} image cleared"));
@@ -117,14 +116,14 @@ impl QuotaDockApp {
             return;
         }
 
-        let include_images = self.send_images_next_sync || !self.pending_image_clears.is_empty();
+        let force_images = self.send_images_next_sync;
         self.sync_running = true;
         self.sync_scheduler.mark_started(Instant::now());
         if !self.queue(Task::SyncUsage {
             device_url: normalize_device_url(&self.settings.device_url),
             selection: self.settings.provider.selection(),
             image_paths: self.settings.images.clone(),
-            include_images,
+            force_images,
             clear_image_ids: self.pending_image_clears.iter().cloned().collect(),
         }) {
             self.sync_running = false;

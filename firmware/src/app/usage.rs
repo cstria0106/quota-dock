@@ -5,7 +5,9 @@ use crate::app::status::waiting_scene;
 use crate::app::ui::{
     color, rgb565, Color, FontFace, Rect, TextAlign, UiCanvas, UI_HEIGHT, UI_WIDTH,
 };
-use crate::network::{UsagePixelArt, UsageProvider, UsageSnapshot, UsageWindow};
+use crate::network::{
+    ProviderImageStatus, ProviderSync, UsagePixelArt, UsageProvider, UsageSnapshot, UsageWindow,
+};
 use heapless::Vec as FixedVec;
 
 const SCREEN_PAD_X: i32 = 20;
@@ -38,6 +40,7 @@ pub struct ProviderImageCache {
 #[derive(Clone)]
 struct CachedProviderImage {
     provider_id: String,
+    image_id: Option<u32>,
     art: PackedPixelArt,
 }
 
@@ -55,13 +58,56 @@ pub fn cache_provider_images(snapshot: &mut UsageSnapshot, cache: &mut ProviderI
             continue;
         };
         match PackedPixelArt::from_wire(&pixel_art) {
-            Some(art) => cache.upsert(provider.id.as_str(), art),
+            Some(art) => cache.upsert(provider.id.as_str(), None, art),
             None => cache.remove(provider.id.as_str()),
         }
     }
 }
 
 impl ProviderImageCache {
+    pub fn apply_sync_image(&mut self, provider: &ProviderSync) {
+        let Some(image_id) = provider.image_id else {
+            self.remove(provider.id.as_str());
+            return;
+        };
+
+        if let Some(pixel_art) = &provider.pixel_art {
+            match PackedPixelArt::from_wire(pixel_art) {
+                Some(art) => self.upsert(provider.id.as_str(), Some(image_id), art),
+                None => self.remove(provider.id.as_str()),
+            }
+            return;
+        }
+
+        if self.entries.iter().any(|entry| {
+            entry.provider_id.eq_ignore_ascii_case(provider.id.as_str())
+                && entry.image_id == Some(image_id)
+        }) {
+            return;
+        }
+        self.remove(provider.id.as_str());
+    }
+
+    pub fn retain_provider_ids(&mut self, provider_ids: &[String]) {
+        self.entries.retain(|entry| {
+            provider_ids
+                .iter()
+                .any(|provider_id| provider_id.eq_ignore_ascii_case(entry.provider_id.as_str()))
+        });
+    }
+
+    pub fn statuses(&self) -> Vec<ProviderImageStatus> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                entry.image_id.as_ref().map(|image_id| ProviderImageStatus {
+                    provider_id: entry.provider_id.clone(),
+                    image_id: image_id.clone(),
+                })
+            })
+            .collect()
+    }
+
     fn get(&self, provider_id: &str) -> Option<&PackedPixelArt> {
         self.entries
             .iter()
@@ -69,18 +115,20 @@ impl ProviderImageCache {
             .map(|entry| &entry.art)
     }
 
-    fn upsert(&mut self, provider_id: &str, art: PackedPixelArt) {
+    fn upsert(&mut self, provider_id: &str, image_id: Option<u32>, art: PackedPixelArt) {
         if let Some(entry) = self
             .entries
             .iter_mut()
             .find(|entry| entry.provider_id.eq_ignore_ascii_case(provider_id))
         {
+            entry.image_id = image_id;
             entry.art = art;
             return;
         }
 
         self.entries.push(CachedProviderImage {
             provider_id: provider_id.to_string(),
+            image_id,
             art,
         });
         if self.entries.len() > MAX_CACHED_PROVIDER_IMAGES {

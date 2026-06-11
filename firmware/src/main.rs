@@ -3,6 +3,7 @@ mod drivers;
 mod network;
 mod time;
 
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,7 @@ use app::usage::{
 };
 use drivers::display::{disable_panel, EspResult, Sh8601};
 use drivers::touch::Ft3168;
-use network::{AppCommand, NetworkStatus, UsageProviderUpdate, UsageSnapshot};
+use network::{AppCommand, NetworkStatus, SyncPayload, UsageProviderUpdate, UsageSnapshot};
 
 const DISPLAY_ENABLED: bool = true;
 const MAIN_LOOP_SLEEP_MS: u64 = 8;
@@ -32,7 +33,8 @@ fn main() {
 }
 
 fn run() -> EspResult {
-    let commands = network::start();
+    let provider_image_statuses = Arc::new(Mutex::new(Vec::new()));
+    let commands = network::start(provider_image_statuses.clone());
 
     if !DISPLAY_ENABLED {
         disable_panel()?;
@@ -95,6 +97,10 @@ fn run() -> EspResult {
                 }
                 AppCommand::UpdateUsage { mut snapshot } => {
                     cache_provider_images(&mut snapshot, &mut provider_image_cache);
+                    publish_provider_image_statuses(
+                        &provider_image_cache,
+                        &provider_image_statuses,
+                    );
                     if let Some(provider) =
                         normalize_selected_provider(&snapshot, selected_provider)
                     {
@@ -117,6 +123,37 @@ fn run() -> EspResult {
                 }
                 AppCommand::UpdateUsageProvider { update } => {
                     apply_provider_update(&mut current_usage, &mut provider_image_cache, update);
+                    publish_provider_image_statuses(
+                        &provider_image_cache,
+                        &provider_image_statuses,
+                    );
+                    if let Some(snapshot) = &current_usage {
+                        if let Some(provider) =
+                            normalize_selected_provider(snapshot, selected_provider)
+                        {
+                            selected_provider = provider;
+                            current_usage_received_at = Some(Instant::now());
+                            last_usage_countdown_refresh = Instant::now();
+                        } else {
+                            current_usage = None;
+                            current_usage_received_at = None;
+                        }
+                    }
+                    refresh_scene(
+                        &mut renderer,
+                        &current_usage,
+                        &provider_image_cache,
+                        current_usage_received_at,
+                        &current_network_status,
+                        selected_provider,
+                    );
+                }
+                AppCommand::Sync { payload } => {
+                    apply_sync(&mut current_usage, &mut provider_image_cache, payload);
+                    publish_provider_image_statuses(
+                        &provider_image_cache,
+                        &provider_image_statuses,
+                    );
                     if let Some(snapshot) = &current_usage {
                         if let Some(provider) =
                             normalize_selected_provider(snapshot, selected_provider)
@@ -221,11 +258,89 @@ fn run_without_display(commands: network::CommandReceiver) -> ! {
                         update.provider.id
                     )
                 }
+                AppCommand::Sync { payload } => {
+                    println!(
+                        "Display disabled; sync ignored: {} visible provider(s)",
+                        payload.visible_provider_ids.len()
+                    )
+                }
             }
         }
 
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn publish_provider_image_statuses(
+    provider_image_cache: &ProviderImageCache,
+    provider_image_statuses: &Arc<Mutex<Vec<network::ProviderImageStatus>>>,
+) {
+    if let Ok(mut statuses) = provider_image_statuses.lock() {
+        *statuses = provider_image_cache.statuses();
+    }
+}
+
+fn apply_sync(
+    current_usage: &mut Option<UsageSnapshot>,
+    provider_image_cache: &mut ProviderImageCache,
+    payload: SyncPayload,
+) {
+    let SyncPayload {
+        visible_provider_ids,
+        providers,
+        updated_at,
+        updated_at_unix,
+    } = payload;
+
+    provider_image_cache.retain_provider_ids(&visible_provider_ids);
+    for provider in &providers {
+        provider_image_cache.apply_sync_image(provider);
+    }
+
+    if visible_provider_ids.is_empty() {
+        *current_usage = None;
+        return;
+    }
+
+    let target = current_usage.get_or_insert_with(|| UsageSnapshot {
+        providers: Vec::new(),
+        updated_at: updated_at.clone(),
+        updated_at_unix,
+    });
+
+    target
+        .providers
+        .retain(|provider| contains_provider_id(&visible_provider_ids, provider.id.as_str()));
+    for sync_provider in providers {
+        let Some(mut provider) = sync_provider.usage else {
+            continue;
+        };
+        provider.pixel_art = None;
+        target.updated_at = updated_at.clone();
+        target.updated_at_unix = updated_at_unix;
+        if let Some(existing) = target
+            .providers
+            .iter_mut()
+            .find(|existing| existing.id.eq_ignore_ascii_case(provider.id.as_str()))
+        {
+            *existing = provider;
+        } else {
+            target.providers.push(provider);
+        }
+    }
+
+    target.providers.sort_by_key(|provider| {
+        visible_provider_ids
+            .iter()
+            .position(|provider_id| provider_id.eq_ignore_ascii_case(provider.id.as_str()))
+            .unwrap_or(usize::MAX)
+    });
+}
+
+fn contains_provider_id(provider_ids: &[String], provider_id: &str) -> bool {
+    provider_ids
+        .iter()
+        .any(|visible_id| visible_id.eq_ignore_ascii_case(provider_id))
 }
 
 fn apply_provider_update(

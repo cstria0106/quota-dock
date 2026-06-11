@@ -28,6 +28,7 @@ const NVS_WIFI_SSID: &str = "wifi_ssid";
 const NVS_WIFI_PASSWORD: &str = "wifi_pass";
 
 pub type CommandReceiver = mpsc::Receiver<AppCommand>;
+pub type ProviderImageStatuses = Arc<Mutex<Vec<ProviderImageStatus>>>;
 type CommandSender = mpsc::SyncSender<AppCommand>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -38,6 +39,7 @@ pub enum AppCommand {
     NetworkStatus { status: NetworkStatus },
     UpdateUsage { snapshot: UsageSnapshot },
     UpdateUsageProvider { update: UsageProviderUpdate },
+    Sync { payload: SyncPayload },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -114,6 +116,30 @@ pub struct UsagePixelArt {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SyncPayload {
+    pub visible_provider_ids: Vec<String>,
+    pub providers: Vec<ProviderSync>,
+    pub updated_at: String,
+    #[serde(default)]
+    pub updated_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProviderSync {
+    pub id: String,
+    pub usage: Option<UsageProvider>,
+    pub image_id: Option<u32>,
+    pub pixel_art: Option<UsagePixelArt>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SyncResponse {
+    pub ok: bool,
+    pub missing_images: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UsageWindow {
     pub kind: String,
     pub label: String,
@@ -128,6 +154,12 @@ pub struct UsageWindow {
 pub struct WifiCredentials {
     pub ssid: String,
     pub password: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProviderImageStatus {
+    pub provider_id: String,
+    pub image_id: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -173,12 +205,12 @@ enum CredentialRequest {
     Clear,
 }
 
-pub fn start() -> CommandReceiver {
+pub fn start(provider_images: ProviderImageStatuses) -> CommandReceiver {
     let (command_tx, command_rx) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
     thread::Builder::new()
         .stack_size(NETWORK_STACK_SIZE)
         .spawn(move || {
-            if let Err(err) = network_task(command_tx) {
+            if let Err(err) = network_task(command_tx, provider_images) {
                 println!("Network task failed: {err:?}");
             }
         })
@@ -186,7 +218,10 @@ pub fn start() -> CommandReceiver {
     command_rx
 }
 
-fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
+fn network_task(
+    command_tx: CommandSender,
+    provider_images: ProviderImageStatuses,
+) -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs_partition = EspDefaultNvsPartition::take()?;
@@ -226,7 +261,7 @@ fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
         } else if !protocol_started {
             send_current_network_status(&command_tx, &state, true);
             set_event(&state, "protocol_server_start");
-            start_protocol_server(command_tx.clone(), state.clone())?;
+            start_protocol_server(command_tx.clone(), state.clone(), provider_images.clone())?;
             protocol_started = true;
             set_event(&state, "protocol_server_ready");
             send_current_network_status(&command_tx, &state, true);
@@ -254,7 +289,11 @@ fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
                 } else if !protocol_started {
                     send_current_network_status(&command_tx, &state, true);
                     set_event(&state, "protocol_server_start");
-                    start_protocol_server(command_tx.clone(), state.clone())?;
+                    start_protocol_server(
+                        command_tx.clone(),
+                        state.clone(),
+                        provider_images.clone(),
+                    )?;
                     protocol_started = true;
                     set_event(&state, "protocol_server_ready");
                     send_current_network_status(&command_tx, &state, true);
@@ -297,8 +336,13 @@ fn send_current_network_status(
     state: &Arc<Mutex<NetworkState>>,
     has_credentials: bool,
 ) {
-    let status = current_status(state);
-    send_network_status(command_tx, has_credentials, status.connected, status.ip);
+    let state = state.lock().ok();
+    send_network_status(
+        command_tx,
+        has_credentials,
+        state.as_ref().map(|state| state.connected).unwrap_or(false),
+        state.as_ref().and_then(|state| state.ip.clone()),
+    );
 }
 
 fn start_serial_task(
@@ -547,12 +591,13 @@ fn crc16_ccitt(bytes: &[u8]) -> u16 {
 fn start_protocol_server(
     command_tx: CommandSender,
     state: Arc<Mutex<NetworkState>>,
+    provider_images: ProviderImageStatuses,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", PROTOCOL_PORT))?;
     println!("Device protocol listening on tcp/{PROTOCOL_PORT}");
     thread::Builder::new()
         .stack_size(PROTOCOL_STACK_SIZE)
-        .spawn(move || protocol_task(listener, command_tx, state))
+        .spawn(move || protocol_task(listener, command_tx, state, provider_images))
         .expect("spawn protocol task");
     Ok(())
 }
@@ -561,11 +606,14 @@ fn protocol_task(
     listener: TcpListener,
     command_tx: CommandSender,
     state: Arc<Mutex<NetworkState>>,
+    provider_images: ProviderImageStatuses,
 ) {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                if let Err(err) = handle_protocol_client(&mut stream, &command_tx, &state) {
+                if let Err(err) =
+                    handle_protocol_client(&mut stream, &command_tx, &state, &provider_images)
+                {
                     println!("Protocol request failed: {err:?}");
                 }
             }
@@ -578,10 +626,11 @@ fn handle_protocol_client(
     stream: &mut TcpStream,
     command_tx: &CommandSender,
     state: &Arc<Mutex<NetworkState>>,
+    provider_images: &ProviderImageStatuses,
 ) -> anyhow::Result<()> {
     let request_body = read_frame(stream)?;
     let request = postcard::from_bytes::<DeviceRequest>(&request_body)?;
-    let reply = handle_device_request(request, command_tx, state);
+    let reply = handle_device_request(request, command_tx, state, provider_images);
     let reply_body = postcard::to_allocvec(&reply)?;
     write_frame(stream, &reply_body)
 }
@@ -590,6 +639,7 @@ fn handle_device_request(
     request: DeviceRequest,
     command_tx: &CommandSender,
     state: &Arc<Mutex<NetworkState>>,
+    provider_images: &ProviderImageStatuses,
 ) -> DeviceReply {
     match request {
         DeviceRequest::Status => DeviceReply::Status(current_status(state)),
@@ -627,7 +677,44 @@ fn handle_device_request(
                 }),
             }
         }
+        DeviceRequest::Sync(payload) => {
+            let missing_images = missing_images(&payload, provider_images);
+            match command_tx.send(AppCommand::Sync { payload }) {
+                Ok(()) => DeviceReply::Sync(SyncResponse {
+                    ok: true,
+                    missing_images,
+                    message: "sync queued".to_string(),
+                }),
+                Err(err) => DeviceReply::Sync(SyncResponse {
+                    ok: false,
+                    missing_images: Vec::new(),
+                    message: format!("sync failed: {err}"),
+                }),
+            }
+        }
     }
+}
+
+fn missing_images(payload: &SyncPayload, provider_images: &ProviderImageStatuses) -> Vec<String> {
+    let cached_images = provider_images
+        .lock()
+        .map(|images| images.clone())
+        .unwrap_or_default();
+    payload
+        .providers
+        .iter()
+        .filter(|provider| provider.pixel_art.is_none())
+        .filter_map(|provider| {
+            let image_id = provider.image_id?;
+            let has_image = cached_images.iter().any(|cached| {
+                cached
+                    .provider_id
+                    .eq_ignore_ascii_case(provider.id.as_str())
+                    && cached.image_id == image_id
+            });
+            (!has_image).then(|| provider.id.clone())
+        })
+        .collect()
 }
 
 fn read_frame(stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
@@ -659,12 +746,14 @@ enum DeviceRequest {
     Command(DeviceCommand),
     Usage(UsageSnapshot),
     UsageProvider(UsageProviderUpdate),
+    Sync(SyncPayload),
 }
 
 #[derive(Debug, Serialize)]
 enum DeviceReply {
     Status(StatusResponse),
     Api(ApiResponse),
+    Sync(SyncResponse),
 }
 
 fn set_wifi_mode_sta() -> anyhow::Result<()> {

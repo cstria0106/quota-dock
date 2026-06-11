@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::usage::{UsageProviderUpdate, UsageSnapshot};
+use crate::usage::{SyncPayload, SyncResponse, UsageProviderUpdate, UsageSnapshot};
 use crate::{ApiResponse, DeviceCommand, StatusResponse};
 
 pub const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 4;
@@ -15,6 +15,7 @@ pub fn http_status(device_url: &str) -> Result<StatusResponse, String> {
     match send_request(device_url, &DeviceRequest::Status)? {
         DeviceReply::Status(status) => Ok(status),
         DeviceReply::Api(response) => Err(format!("expected status reply: {}", response.message)),
+        DeviceReply::Sync(_) => Err("expected status reply, got sync".to_string()),
     }
 }
 
@@ -22,6 +23,7 @@ pub fn http_usage(device_url: &str, snapshot: &UsageSnapshot) -> Result<ApiRespo
     match send_request(device_url, &DeviceRequest::Usage(snapshot))? {
         DeviceReply::Api(response) => Ok(response),
         DeviceReply::Status(_) => Err("expected api reply, got status".to_string()),
+        DeviceReply::Sync(_) => Err("expected api reply, got sync".to_string()),
     }
 }
 
@@ -32,6 +34,19 @@ pub fn http_usage_provider(
     match send_request(device_url, &DeviceRequest::UsageProvider(update))? {
         DeviceReply::Api(response) => Ok(response),
         DeviceReply::Status(_) => Err("expected api reply, got status".to_string()),
+        DeviceReply::Sync(_) => Err("expected api reply, got sync".to_string()),
+    }
+}
+
+pub fn http_sync(device_url: &str, payload: &SyncPayload) -> Result<SyncResponse, String> {
+    match send_request(device_url, &DeviceRequest::Sync(payload))? {
+        DeviceReply::Sync(response) => Ok(response),
+        DeviceReply::Api(response) => Ok(SyncResponse {
+            ok: response.ok,
+            missing_images: Vec::new(),
+            message: response.message,
+        }),
+        DeviceReply::Status(_) => Err("expected sync reply, got status".to_string()),
     }
 }
 
@@ -39,6 +54,7 @@ pub fn http_command(device_url: &str, command: &DeviceCommand) -> Result<ApiResp
     match send_request(device_url, &DeviceRequest::Command(command))? {
         DeviceReply::Api(response) => Ok(response),
         DeviceReply::Status(_) => Err("expected api reply, got status".to_string()),
+        DeviceReply::Sync(_) => Err("expected api reply, got sync".to_string()),
     }
 }
 
@@ -131,12 +147,14 @@ enum DeviceRequest<'a> {
     Command(&'a DeviceCommand),
     Usage(&'a UsageSnapshot),
     UsageProvider(&'a UsageProviderUpdate),
+    Sync(&'a SyncPayload),
 }
 
 #[derive(Deserialize)]
 enum DeviceReply {
     Status(StatusResponse),
     Api(ApiResponse),
+    Sync(SyncResponse),
 }
 
 #[cfg(test)]

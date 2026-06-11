@@ -50,6 +50,29 @@ pub struct UsageProviderUpdate {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SyncPayload {
+    pub visible_provider_ids: Vec<String>,
+    pub providers: Vec<ProviderSync>,
+    pub updated_at: String,
+    pub updated_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProviderSync {
+    pub id: String,
+    pub usage: Option<UsageProvider>,
+    pub image_id: Option<u32>,
+    pub pixel_art: Option<UsagePixelArt>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SyncResponse {
+    pub ok: bool,
+    pub missing_images: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UsageProvider {
     pub id: String,
     pub label: String,
@@ -175,6 +198,11 @@ pub fn validate_provider_image(path: &Path) -> Result<UsagePixelArt, String> {
     pixel_art_from_image(path)
 }
 
+pub fn provider_image_id(pixel_art: &UsagePixelArt) -> Result<u32, String> {
+    let body = postcard::to_allocvec(pixel_art).map_err(|err| err.to_string())?;
+    Ok(fnv1a32(&body))
+}
+
 pub fn attach_provider_images(
     snapshot: &mut UsageSnapshot,
     image_paths: &BTreeMap<String, PathBuf>,
@@ -263,6 +291,15 @@ fn pixel_art_from_image(path: &Path) -> Result<UsagePixelArt, String> {
             .map(|[red, green, blue]| format!("#{red:02X}{green:02X}{blue:02X}"))
             .collect(),
         rows,
+    })
+}
+
+fn fnv1a32(bytes: &[u8]) -> u32 {
+    const FNV_OFFSET_BASIS: u32 = 0x811c9dc5;
+    const FNV_PRIME: u32 = 0x01000193;
+
+    bytes.iter().fold(FNV_OFFSET_BASIS, |hash, byte| {
+        (hash ^ u32::from(*byte)).wrapping_mul(FNV_PRIME)
     })
 }
 
@@ -598,6 +635,28 @@ mod tests {
 
         fs::remove_file(image_path).expect("remove image");
         fs::remove_dir(dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn provider_image_id_tracks_wire_art_content() {
+        let art = UsagePixelArt {
+            palette: vec!["#123456".to_string()],
+            rows: vec!["10".to_string(), "01".to_string()],
+        };
+        let same_art = art.clone();
+        let changed_art = UsagePixelArt {
+            rows: vec!["11".to_string(), "01".to_string()],
+            ..art.clone()
+        };
+
+        assert_eq!(
+            provider_image_id(&art).expect("image id"),
+            provider_image_id(&same_art).expect("same image id")
+        );
+        assert_ne!(
+            provider_image_id(&art).expect("image id"),
+            provider_image_id(&changed_art).expect("changed image id")
+        );
     }
 
     #[test]

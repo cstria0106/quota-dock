@@ -80,6 +80,20 @@ pub mod network {
     }
 
     #[derive(Clone, Debug)]
+    pub struct ProviderSync {
+        pub id: String,
+        pub usage: Option<UsageProvider>,
+        pub image_id: Option<u32>,
+        pub pixel_art: Option<UsagePixelArt>,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct ProviderImageStatus {
+        pub provider_id: String,
+        pub image_id: u32,
+    }
+
+    #[derive(Clone, Debug)]
     pub struct UsageTheme {
         pub accent: String,
         pub panel: String,
