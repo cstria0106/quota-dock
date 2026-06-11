@@ -434,8 +434,7 @@ pub(crate) fn window(
 
 pub(crate) fn percent_from_value(value: &serde_json::Value) -> Option<u8> {
     let raw = value.as_f64()?;
-    let percent = if raw <= 1.0 { raw * 100.0 } else { raw };
-    Some(percent.round().clamp(0.0, 100.0) as u8)
+    Some(raw.round().clamp(0.0, 100.0) as u8)
 }
 
 pub(crate) fn clamp_percent_i64(value: i64) -> u8 {
@@ -582,6 +581,14 @@ mod tests {
 
         assert_eq!(snapshot.providers.len(), 1);
         assert_eq!(snapshot.providers[0].id, codex::PROVIDER_ID);
+    }
+
+    #[test]
+    fn parses_usage_values_as_percentages() {
+        assert_eq!(percent_from_value(&serde_json::json!(1)), Some(1));
+        assert_eq!(percent_from_value(&serde_json::json!(12.5)), Some(13));
+        assert_eq!(percent_from_value(&serde_json::json!(101)), Some(100));
+        assert_eq!(percent_from_value(&serde_json::json!(-1)), Some(0));
     }
 
     #[test]
