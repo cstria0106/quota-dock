@@ -86,17 +86,20 @@ jobs:
       matrix:
         include:
           - name: windows-x64
-            os: windows-2025
+            os: ubuntu-24.04
             target: x86_64-pc-windows-msvc
             package: quota-dock-desktop-windows-x64.zip
+            xwin: true
           - name: macos-x64
             os: macos-15-intel
             target: x86_64-apple-darwin
             package: quota-dock-desktop-macos-x64.tar.gz
+            xwin: false
           - name: macos-arm64
             os: macos-15
             target: aarch64-apple-darwin
             package: quota-dock-desktop-macos-arm64.tar.gz
+            xwin: false
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -114,10 +117,27 @@ jobs:
           path: |
             ~/.cargo/git
             ~/.cargo/registry
+            ~/.cache/cargo-xwin
             desktop/target
-          key: desktop-${{ matrix.target }}-${{ hashFiles('desktop/Cargo.lock', 'desktop/Cargo.toml', 'core/Cargo.toml') }}
+            ~/.pnpm-store
+          key: desktop-${{ matrix.target }}-${{ hashFiles('desktop/Cargo.lock', 'desktop/Cargo.toml', 'desktop/pnpm-lock.yaml', 'core/Cargo.toml') }}
           restore-keys: |
             desktop-${{ matrix.target }}-
+
+      - name: Install Node dependencies
+        working-directory: desktop
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Install Windows cross build dependencies
+        if: matrix.xwin == true
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm zip
+          cargo install cargo-xwin --locked
 
       - name: Prepare firmware bundle inputs
         shell: bash
@@ -130,22 +150,39 @@ jobs:
           path: firmware/target/flash
 
       - name: Test desktop
+        if: matrix.xwin == false
         working-directory: desktop
         run: cargo test --locked --target ${{ matrix.target }}
 
+      - name: Test desktop
+        if: matrix.xwin == true
+        working-directory: desktop
+        run: cargo test --locked
+
+      - name: Typecheck desktop UI
+        working-directory: desktop
+        run: pnpm typecheck
+
       - name: Build desktop
         working-directory: desktop
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          if [ "${{ matrix.xwin }}" = "true" ]; then
+            pnpm frontend:build
+            cargo xwin build --release --locked --target ${{ matrix.target }} --features custom-protocol
+          else
+            pnpm build -- --target ${{ matrix.target }}
+          fi
 
       - name: Package Windows desktop app
-        if: runner.os == 'Windows'
-        shell: pwsh
+        if: matrix.xwin == true
+        shell: bash
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive `
-            -Path "desktop\target\${{ matrix.target }}\release\quota-dock-desktop.exe" `
-            -DestinationPath "dist\${{ matrix.package }}" `
-            -Force
+          set -euo pipefail
+
+          mkdir -p dist
+          zip -j "dist/${{ matrix.package }}" \
+            "desktop/target/${{ matrix.target }}/release/quota-dock-desktop.exe"
 
       - name: Package macOS desktop app
         if: runner.os == 'macOS'
@@ -153,42 +190,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          app_dir="dist/QuotaDock.app"
-          executable="$app_dir/Contents/MacOS/QuotaDock"
-
-          mkdir -p "$app_dir/Contents/MacOS"
-          cp "desktop/target/${{ matrix.target }}/release/quota-dock-desktop" "$executable"
-          chmod +x "$executable"
-
-          cat > "$app_dir/Contents/Info.plist" <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleDevelopmentRegion</key>
-            <string>en</string>
-            <key>CFBundleDisplayName</key>
-            <string>QuotaDock</string>
-            <key>CFBundleExecutable</key>
-            <string>QuotaDock</string>
-            <key>CFBundleIdentifier</key>
-            <string>dev.quotadock.app</string>
-            <key>CFBundleName</key>
-            <string>QuotaDock</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>CFBundleShortVersionString</key>
-            <string>0.1.0</string>
-            <key>CFBundleVersion</key>
-            <string>0.1.0</string>
-            <key>NSHighResolutionCapable</key>
-            <true/>
-          </dict>
-          </plist>
-          PLIST
-
-          codesign --force --deep --sign - "$app_dir"
-          tar -czf "dist/${{ matrix.package }}" -C dist "QuotaDock.app"
+          mkdir -p dist
+          tar -czf "dist/${{ matrix.package }}" -C "desktop/target/${{ matrix.target }}/release" quota-dock-desktop
 
       - name: Upload desktop release package
         uses: actions/upload-artifact@v7

@@ -131,6 +131,10 @@ pub fn reset_device(port: &str, baud: u32) -> Result<(), String> {
         .map_err(|err| format!("reset device: {err}"))
 }
 
+pub fn probe_esp32s3(port: &str, baud: u32) -> Result<(), String> {
+    connect_flasher(port, baud).map(|_| ())
+}
+
 pub fn parse_u32(value: &str) -> Result<u32, String> {
     if let Some(hex) = value
         .strip_prefix("0x")

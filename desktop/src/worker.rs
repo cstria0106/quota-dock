@@ -4,6 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
+use quota_dock_core::flash::probe_esp32s3;
 use quota_dock_core::http::{http_command, http_status, http_sync, postcard_len};
 use quota_dock_core::serial::{send_serial, send_serial_status, serial_port_names};
 use quota_dock_core::{
@@ -15,10 +16,13 @@ use quota_dock_core::{
 use crate::firmware::flash_bundled_firmware;
 
 const SERIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+const BOARD_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 pub enum Task {
-    RefreshPorts,
+    DetectBoard {
+        baud: u32,
+    },
     FlashFirmware {
         port: String,
         baud: u32,
@@ -28,10 +32,6 @@ pub enum Task {
         baud: u32,
         ssid: String,
         password: String,
-    },
-    ClearWifi {
-        port: String,
-        baud: u32,
     },
     SerialStatus {
         port: String,
@@ -63,10 +63,9 @@ pub enum Task {
 
 #[derive(Debug)]
 pub enum TaskResult {
-    Ports(Result<Vec<String>, String>),
+    BoardDetection(Result<BoardDetectionReport, String>),
     FlashFirmware(Result<(), String>),
     SendWifi(Result<ApiResponse, String>),
-    ClearWifi(Result<ApiResponse, String>),
     SerialStatus(Result<StatusResponse, String>),
     HttpStatus(Result<StatusResponse, String>),
     Command {
@@ -90,6 +89,12 @@ pub struct SyncReport {
     pub cleared_images: Vec<String>,
     pub provider_count: usize,
     pub message: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BoardDetectionReport {
+    pub port: Option<String>,
+    pub firmware_status: Option<StatusResponse>,
 }
 
 #[derive(Clone, Debug)]
@@ -134,7 +139,7 @@ impl Worker {
 
 fn run_task(task: Task) -> TaskResult {
     match task {
-        Task::RefreshPorts => TaskResult::Ports(serial_port_names()),
+        Task::DetectBoard { baud } => TaskResult::BoardDetection(detect_board(baud)),
         Task::FlashFirmware { port, baud } => {
             TaskResult::FlashFirmware(flash_bundled_firmware(&port, baud))
         }
@@ -147,12 +152,6 @@ fn run_task(task: Task) -> TaskResult {
             &port,
             baud,
             &SerialRequest::SetWifi { ssid, password },
-            SERIAL_REQUEST_TIMEOUT,
-        )),
-        Task::ClearWifi { port, baud } => TaskResult::ClearWifi(send_serial(
-            &port,
-            baud,
-            &SerialRequest::ClearWifi,
             SERIAL_REQUEST_TIMEOUT,
         )),
         Task::SerialStatus { port, baud } => {
@@ -195,6 +194,28 @@ fn run_task(task: Task) -> TaskResult {
             }
         }
     }
+}
+
+fn detect_board(baud: u32) -> Result<BoardDetectionReport, String> {
+    let ports = serial_port_names()?;
+    for port in ports {
+        if let Ok(status) = send_serial_status(&port, baud, BOARD_STATUS_TIMEOUT) {
+            return Ok(BoardDetectionReport {
+                port: Some(port),
+                firmware_status: Some(status),
+            });
+        }
+        if probe_esp32s3(&port, baud).is_ok() {
+            return Ok(BoardDetectionReport {
+                port: Some(port),
+                firmware_status: None,
+            });
+        }
+    }
+    Ok(BoardDetectionReport {
+        port: None,
+        firmware_status: None,
+    })
 }
 
 struct SyncUsageRequest {

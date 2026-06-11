@@ -1,11 +1,12 @@
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serialport::ClearBuffer;
+#[cfg(unix)]
+use std::process::Command;
 
 use crate::{ApiResponse, DeviceCommand, StatusResponse};
 

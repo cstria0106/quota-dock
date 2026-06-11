@@ -3,7 +3,7 @@
 This repository is organized as a multi-target project:
 
 - `firmware/` contains the Rust-first ESP-IDF firmware for an ESP32-S3 board with an SH8601 AMOLED display.
-- Future desktop application code should live outside `firmware/`, in its own top-level folder.
+- `desktop/` contains the Tauri v2 desktop app and its Vanilla TypeScript UI.
 
 # Tooling
 
@@ -26,6 +26,24 @@ cd firmware
 ```
 
 The project target is `esp32s3`, and the default flash settings are kept in `sdkconfig.defaults`.
+
+Desktop builds are run from the desktop root:
+
+```sh
+cd desktop
+pnpm typecheck
+cargo test --locked
+pnpm build
+```
+
+Windows desktop builds should be validated with `cargo xwin` through the project script:
+
+```sh
+cd desktop
+pnpm build:windows
+```
+
+Keep Windows builds on Tauri's `custom-protocol` feature so the portable `.exe` loads bundled UI assets instead of trying to open the dev server URL. Desktop release artifacts should be single portable binaries, not installer packages.
 
 # Upload And Monitor
 
