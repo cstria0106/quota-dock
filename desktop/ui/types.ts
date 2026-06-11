@@ -22,6 +22,7 @@ export type CommandName =
   | "sync_now"
   | "set_sync_enabled"
   | "set_sync_interval"
+  | "set_device_language"
   | "set_provider_enabled"
   | "choose_provider_image"
   | "clear_provider_image"

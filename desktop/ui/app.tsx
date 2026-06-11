@@ -3,11 +3,13 @@ import { listen } from "@tauri-apps/api/event";
 import * as React from "react";
 
 import { Spinner } from "@/components/feedback";
+import { useSettings } from "@/lib/settings";
 import type { AppSnapshot, CommandArgs, CommandName } from "@/types";
 import { DockView } from "@/views/dock-view";
 import { SetupView } from "@/views/setup-view";
 
 export function App() {
+  const { locale } = useSettings();
   const [snapshot, setSnapshot] = React.useState<AppSnapshot | null>(null);
   const [commandError, setCommandError] = React.useState<string | null>(null);
   const [flashConfirmOpen, setFlashConfirmOpen] = React.useState(false);
@@ -39,6 +41,10 @@ export function App() {
     },
     [applySnapshot],
   );
+
+  React.useEffect(() => {
+    void runCommand("set_device_language", { language: locale });
+  }, [locale, runCommand]);
 
   React.useEffect(() => {
     let disposed = false;

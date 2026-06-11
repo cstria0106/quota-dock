@@ -55,6 +55,7 @@ pub struct SyncPayload {
     pub providers: Vec<ProviderSync>,
     pub updated_at: String,
     pub updated_at_unix: u64,
+    pub language: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::app::renderer::{Scene, UiObject};
 use crate::app::status::waiting_scene;
+use crate::app::text::{self, Language};
 use crate::app::ui::{
     color, rgb565, Color, FontFace, Rect, TextAlign, UiCanvas, UI_HEIGHT, UI_WIDTH,
 };
@@ -206,15 +207,16 @@ pub fn usage_scene(
     image_cache: &ProviderImageCache,
     selected_provider: usize,
     elapsed_since_update_secs: u64,
+    language: Language,
 ) -> Scene {
     let Some(selected_provider) = normalize_selected_provider(snapshot, selected_provider) else {
-        return waiting_scene();
+        return waiting_scene(language);
     };
 
     let provider = &snapshot.providers[selected_provider];
     let windows = drawable_windows(provider);
     if windows.is_empty() {
-        return waiting_scene();
+        return waiting_scene(language);
     }
 
     let theme = provider_theme(provider);
@@ -228,6 +230,7 @@ pub fn usage_scene(
         snapshot
             .updated_at_unix
             .saturating_add(elapsed_since_update_secs),
+        language,
     );
     scene
 }
@@ -276,6 +279,7 @@ fn push_usage_layout(
     windows: &[&UsageWindow],
     theme: &ThemeColors,
     current_unix: u64,
+    language: Language,
 ) {
     let x = SCREEN_PAD_X;
     let width = UI_WIDTH as i32 - SCREEN_PAD_X * 2;
@@ -294,6 +298,7 @@ fn push_usage_layout(
             windows[0],
             theme,
             current_unix,
+            language,
         );
         return;
     }
@@ -311,6 +316,7 @@ fn push_usage_layout(
         windows[0],
         theme,
         current_unix,
+        language,
     );
 
     let secondary_y = y + primary_h + PANEL_GAP;
@@ -321,6 +327,7 @@ fn push_usage_layout(
             windows[1],
             theme,
             current_unix,
+            language,
         );
         return;
     }
@@ -332,6 +339,7 @@ fn push_usage_layout(
         windows[1],
         theme,
         current_unix,
+        language,
     );
     push_usage_card(
         scene,
@@ -344,6 +352,7 @@ fn push_usage_layout(
         windows[2],
         theme,
         current_unix,
+        language,
     );
 }
 
@@ -357,6 +366,7 @@ fn push_primary_panel(
     window: &UsageWindow,
     theme: &ThemeColors,
     current_unix: u64,
+    language: Language,
 ) {
     scene.push(UiObject::rounded_rect(
         x,
@@ -390,6 +400,7 @@ fn push_primary_panel(
         theme,
         true,
         current_unix,
+        language,
     );
 }
 
@@ -399,6 +410,7 @@ fn push_usage_card(
     window: &UsageWindow,
     theme: &ThemeColors,
     current_unix: u64,
+    language: Language,
 ) {
     scene.push(UiObject::rounded_rect(
         rect.x,
@@ -418,6 +430,7 @@ fn push_usage_card(
         theme,
         false,
         current_unix,
+        language,
     );
 }
 
@@ -428,9 +441,10 @@ fn push_usage_content(
     theme: &ThemeColors,
     primary: bool,
     current_unix: u64,
+    language: Language,
 ) {
     let percent_text = format!("{}%", window.used_percent);
-    let reset_text = reset_label(window, current_unix);
+    let reset_text = reset_label(window, current_unix, language);
     let pill_scale = 2;
     let pill_font = FontFace::Galmuri7;
     let pill_h = USAGE_PILL_H;
@@ -558,7 +572,7 @@ fn is_drawable_provider(provider: &UsageProvider) -> bool {
             .any(|window| !window.status.eq_ignore_ascii_case("error"))
 }
 
-fn reset_label(window: &UsageWindow, current_unix: u64) -> Option<String> {
+fn reset_label(window: &UsageWindow, current_unix: u64, language: Language) -> Option<String> {
     if window
         .resets_at
         .as_deref()
@@ -566,7 +580,7 @@ fn reset_label(window: &UsageWindow, current_unix: u64) -> Option<String> {
         .map(|reset| reset.eq_ignore_ascii_case("rolling"))
         .unwrap_or(false)
     {
-        return Some("Rolling window".to_string());
+        return Some(text::reset_rolling_window(language));
     }
 
     let timestamp = window.resets_at_unix.or_else(|| {
@@ -581,7 +595,7 @@ fn reset_label(window: &UsageWindow, current_unix: u64) -> Option<String> {
         return None;
     }
     if timestamp <= current_unix {
-        return Some("Resets soon".to_string());
+        return Some(text::reset_soon(language));
     }
 
     let remaining = timestamp - current_unix;
@@ -590,11 +604,11 @@ fn reset_label(window: &UsageWindow, current_unix: u64) -> Option<String> {
     let minutes = (remaining % 3_600) / 60;
 
     if days > 0 {
-        Some(format!("Resets in {days}d {hours}h"))
+        Some(text::reset_in_days(language, days, hours))
     } else if hours > 0 {
-        Some(format!("Resets in {hours}h {minutes}m"))
+        Some(text::reset_in_hours(language, hours, minutes))
     } else {
-        Some(format!("Resets in {minutes}m"))
+        Some(text::reset_in_minutes(language, minutes))
     }
 }
 

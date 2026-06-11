@@ -38,6 +38,7 @@ pub fn run() {
             sync_now,
             set_sync_enabled,
             set_sync_interval,
+            set_device_language,
             set_provider_enabled,
             choose_provider_image,
             clear_provider_image,
@@ -155,6 +156,17 @@ fn set_sync_interval(
         controller.settings.sync_interval_secs = interval_secs;
         controller.save_settings();
         Ok(())
+    })
+}
+
+#[tauri::command]
+fn set_device_language(
+    language: String,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.set_device_language(&language)
     })
 }
 
@@ -287,6 +299,7 @@ struct DesktopController {
     available_providers: Vec<AvailableProvider>,
     sync_scheduler: SyncScheduler,
     sync_enabled: bool,
+    device_language: String,
     send_images_next_sync: bool,
     pending_image_clears: BTreeSet<String>,
     log: Vec<String>,
@@ -319,6 +332,7 @@ impl DesktopController {
             available_providers: Vec::new(),
             sync_scheduler: SyncScheduler::default(),
             sync_enabled,
+            device_language: "ko".to_string(),
             send_images_next_sync: true,
             pending_image_clears: BTreeSet::new(),
             log: Vec::new(),
@@ -929,6 +943,7 @@ impl DesktopController {
         self.sync_running = true;
         if self.queue(Task::SyncUsage {
             device_url: normalize_device_url(&self.settings.device_url),
+            language: self.device_language.clone(),
             disabled_provider_ids: self.settings.disabled_provider_ids.clone(),
             image_paths: self.settings.images.clone(),
             force_images,
@@ -962,6 +977,16 @@ impl DesktopController {
             "sync: ok={} providers={} {}",
             report.ok, report.provider_count, report.message
         ));
+    }
+
+    fn set_device_language(&mut self, language: &str) -> Result<(), String> {
+        let language = normalize_device_language(language)?;
+        if self.device_language == language {
+            return Ok(());
+        }
+        self.device_language = language;
+        self.sync_scheduler.request_send_now();
+        Ok(())
     }
 
     fn provider_options(&self) -> Vec<ProviderOptionSnapshot> {
@@ -1223,6 +1248,14 @@ fn normalize_device_url(value: &str) -> String {
     }
 }
 
+fn normalize_device_language(value: &str) -> Result<String, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "en" | "en-us" => Ok("en".to_string()),
+        "ko" | "ko-kr" => Ok("ko".to_string()),
+        _ => Err(format!("지원하지 않는 보드 언어입니다: {value}")),
+    }
+}
+
 fn first_error_line(label: &str, message: &str) -> String {
     match message.lines().next() {
         Some(first) if !first.trim().is_empty() => format!("{label}: {first}"),
@@ -1312,6 +1345,7 @@ impl DesktopController {
             available_providers: Vec::new(),
             sync_scheduler: SyncScheduler::default(),
             sync_enabled: false,
+            device_language: "ko".to_string(),
             send_images_next_sync: true,
             pending_image_clears: BTreeSet::new(),
             log: Vec::new(),

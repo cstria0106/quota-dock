@@ -33,9 +33,70 @@ pub fn generate_bitmap_font(
 fn collect_font_chars(source: &str, font_name: &str) -> BTreeSet<char> {
     let mut chars = BTreeSet::new();
     collect_macro_string_chars(source, "ui_font_chars!", &mut chars);
-    collect_font_macro_string_chars(source, "ui_font_chars_for!", font_name, &mut chars);
-    collect_font_macro_string_chars(source, "ui_text!", font_name, &mut chars);
+    collect_font_macro_string_chars(
+        source,
+        "ui_font_chars_for!",
+        font_name,
+        &mut chars,
+        collect_literal_chars,
+    );
+    collect_font_macro_string_chars(
+        source,
+        "ui_text!",
+        font_name,
+        &mut chars,
+        collect_literal_chars,
+    );
+    collect_font_macro_string_chars(
+        source,
+        "ui_format!",
+        font_name,
+        &mut chars,
+        collect_format_literal_chars,
+    );
+    collect_two_font_macro_string_chars(
+        source,
+        "ui_format_for_fonts!",
+        font_name,
+        &mut chars,
+        collect_format_literal_chars,
+    );
     chars
+}
+
+fn collect_literal_chars(literal: &str, chars: &mut BTreeSet<char>) {
+    chars.extend(literal.chars());
+}
+
+fn collect_format_literal_chars(literal: &str, chars: &mut BTreeSet<char>) {
+    let mut iter = literal.chars().peekable();
+    while let Some(ch) = iter.next() {
+        match ch {
+            '{' => {
+                if iter.peek().copied() == Some('{') {
+                    iter.next();
+                    chars.insert('{');
+                    continue;
+                }
+                for format_ch in iter.by_ref() {
+                    if format_ch == '}' {
+                        break;
+                    }
+                }
+            }
+            '}' => {
+                if iter.peek().copied() == Some('}') {
+                    iter.next();
+                    chars.insert('}');
+                } else {
+                    chars.insert(ch);
+                }
+            }
+            other => {
+                chars.insert(other);
+            }
+        }
+    }
 }
 
 fn collect_macro_string_chars(source: &str, macro_name: &str, chars: &mut BTreeSet<char>) {
@@ -49,7 +110,7 @@ fn collect_macro_string_chars(source: &str, macro_name: &str, chars: &mut BTreeS
         let Some((literal, next_index)) = parse_next_string_literal(remaining) else {
             continue;
         };
-        chars.extend(literal.chars());
+        collect_literal_chars(&literal, chars);
         remaining = &remaining[next_index..];
     }
 }
@@ -59,6 +120,7 @@ fn collect_font_macro_string_chars(
     macro_name: &str,
     font_name: &str,
     chars: &mut BTreeSet<char>,
+    collect_chars: fn(&str, &mut BTreeSet<char>),
 ) {
     let mut remaining = source;
     while let Some(index) = remaining.find(macro_name) {
@@ -79,9 +141,49 @@ fn collect_font_macro_string_chars(
             continue;
         };
         if macro_font_name == font_name {
-            chars.extend(literal.chars());
+            collect_chars(&literal, chars);
         }
         remaining = &after_comma[next_index..];
+    }
+}
+
+fn collect_two_font_macro_string_chars(
+    source: &str,
+    macro_name: &str,
+    font_name: &str,
+    chars: &mut BTreeSet<char>,
+    collect_chars: fn(&str, &mut BTreeSet<char>),
+) {
+    let mut remaining = source;
+    while let Some(index) = remaining.find(macro_name) {
+        remaining = &remaining[index + macro_name.len()..];
+        let Some(open_index) = remaining.find('(') else {
+            break;
+        };
+        remaining = &remaining[open_index + 1..];
+        let trimmed = remaining.trim_start();
+        let Some((first_font_name, after_first_index)) = parse_ident(trimmed) else {
+            continue;
+        };
+        let after_first = trimmed[after_first_index..].trim_start();
+        let Some(after_first_comma) = after_first.strip_prefix(',') else {
+            continue;
+        };
+        let after_first_comma = after_first_comma.trim_start();
+        let Some((second_font_name, after_second_index)) = parse_ident(after_first_comma) else {
+            continue;
+        };
+        let after_second = after_first_comma[after_second_index..].trim_start();
+        let Some(after_second_comma) = after_second.strip_prefix(',') else {
+            continue;
+        };
+        let Some((literal, next_index)) = parse_next_string_literal(after_second_comma) else {
+            continue;
+        };
+        if first_font_name == font_name || second_font_name == font_name {
+            collect_chars(&literal, chars);
+        }
+        remaining = &after_second_comma[next_index..];
     }
 }
 

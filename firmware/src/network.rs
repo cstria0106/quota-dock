@@ -122,6 +122,8 @@ pub struct SyncPayload {
     pub updated_at: String,
     #[serde(default)]
     pub updated_at_unix: u64,
+    #[serde(default)]
+    pub language: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

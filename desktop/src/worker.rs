@@ -47,6 +47,7 @@ pub enum Task {
     },
     SyncUsage {
         device_url: String,
+        language: String,
         disabled_provider_ids: BTreeSet<String>,
         image_paths: BTreeMap<String, PathBuf>,
         force_images: bool,
@@ -175,8 +176,10 @@ fn run_task(task: Task) -> TaskResult {
             cached_snapshot,
             cached_available_providers,
             refresh_usage,
+            language,
         } => TaskResult::SyncUsage(sync_usage(SyncUsageRequest {
             device_url,
+            language,
             disabled_provider_ids,
             image_paths,
             force_images,
@@ -220,6 +223,7 @@ fn detect_board(baud: u32) -> Result<BoardDetectionReport, String> {
 
 struct SyncUsageRequest {
     device_url: String,
+    language: String,
     disabled_provider_ids: BTreeSet<String>,
     image_paths: BTreeMap<String, PathBuf>,
     force_images: bool,
@@ -232,6 +236,7 @@ struct SyncUsageRequest {
 fn sync_usage(request: SyncUsageRequest) -> SyncReport {
     let SyncUsageRequest {
         device_url,
+        language,
         disabled_provider_ids,
         image_paths,
         force_images,
@@ -270,7 +275,13 @@ fn sync_usage(request: SyncUsageRequest) -> SyncReport {
     }
 
     strip_snapshot_images(&mut snapshot);
-    let first_payload = sync_payload(&snapshot, &provider_images, true, &image_provider_ids);
+    let first_payload = sync_payload(
+        &snapshot,
+        &provider_images,
+        true,
+        &image_provider_ids,
+        language.as_str(),
+    );
     let first_image_count = image_payload_count(&first_payload);
     let first_bytes = postcard_len(&first_payload).unwrap_or_default();
     let mut image_update_count = 0;
@@ -292,7 +303,13 @@ fn sync_usage(request: SyncUsageRequest) -> SyncReport {
     };
 
     if failures.is_empty() && !image_provider_ids.is_empty() {
-        let image_payload = sync_payload(&snapshot, &provider_images, false, &image_provider_ids);
+        let image_payload = sync_payload(
+            &snapshot,
+            &provider_images,
+            false,
+            &image_provider_ids,
+            language.as_str(),
+        );
         let image_count = image_payload_count(&image_payload);
         let image_bytes = postcard_len(&image_payload).unwrap_or_default();
         match http_sync(&device_url, &image_payload) {
@@ -396,6 +413,7 @@ fn sync_payload(
     provider_images: &BTreeMap<String, LocalProviderImage>,
     include_usage: bool,
     image_provider_ids: &BTreeSet<String>,
+    language: &str,
 ) -> SyncPayload {
     SyncPayload {
         visible_provider_ids: snapshot
@@ -421,6 +439,7 @@ fn sync_payload(
             .collect(),
         updated_at: snapshot.updated_at.clone(),
         updated_at_unix: snapshot.updated_at_unix,
+        language: language.to_string(),
     }
 }
 

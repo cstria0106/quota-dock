@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use app::renderer::{Renderer, Scene};
 use app::status::{network_status_scene, waiting_scene};
+use app::text::{self, Language};
 use app::usage::{
     cache_provider_images, next_provider_index, normalize_selected_provider, usage_scene,
     ProviderImageCache,
@@ -63,6 +64,7 @@ fn run() -> EspResult {
     let mut provider_image_cache = ProviderImageCache::default();
     let mut current_network_status: Option<NetworkStatus> = None;
     let mut selected_provider = 0;
+    let mut language = text::DEFAULT_LANGUAGE;
     let mut was_touching = false;
     let mut last_touch_error_logged_at: Option<Instant> = None;
     let mut last_touch_poll = Instant::now();
@@ -81,6 +83,7 @@ fn run() -> EspResult {
                             current_usage_received_at,
                             &current_network_status,
                             selected_provider,
+                            language,
                         );
                     }
                 }
@@ -93,6 +96,7 @@ fn run() -> EspResult {
                         current_usage_received_at,
                         &current_network_status,
                         selected_provider,
+                        language,
                     );
                 }
                 AppCommand::UpdateUsage { mut snapshot } => {
@@ -119,6 +123,7 @@ fn run() -> EspResult {
                         current_usage_received_at,
                         &current_network_status,
                         selected_provider,
+                        language,
                     );
                 }
                 AppCommand::UpdateUsageProvider { update } => {
@@ -146,9 +151,13 @@ fn run() -> EspResult {
                         current_usage_received_at,
                         &current_network_status,
                         selected_provider,
+                        language,
                     );
                 }
                 AppCommand::Sync { payload } => {
+                    if let Some(next_language) = Language::from_code(payload.language.as_str()) {
+                        language = next_language;
+                    }
                     apply_sync(&mut current_usage, &mut provider_image_cache, payload);
                     publish_provider_image_statuses(
                         &provider_image_cache,
@@ -173,6 +182,7 @@ fn run() -> EspResult {
                         current_usage_received_at,
                         &current_network_status,
                         selected_provider,
+                        language,
                     );
                 }
             }
@@ -206,6 +216,7 @@ fn run() -> EspResult {
                         current_usage_received_at,
                         &current_network_status,
                         selected_provider,
+                        language,
                     );
                 }
             }
@@ -223,6 +234,7 @@ fn run() -> EspResult {
                 current_usage_received_at,
                 &current_network_status,
                 selected_provider,
+                language,
             );
             last_usage_countdown_refresh = Instant::now();
         }
@@ -290,6 +302,7 @@ fn apply_sync(
         providers,
         updated_at,
         updated_at_unix,
+        language: _,
     } = payload;
 
     provider_image_cache.retain_provider_ids(&visible_provider_ids);
@@ -395,6 +408,7 @@ fn refresh_scene(
     current_usage_received_at: Option<Instant>,
     current_network_status: &Option<NetworkStatus>,
     selected_provider: usize,
+    language: Language,
 ) {
     renderer.set_scene(current_scene(
         current_usage,
@@ -402,6 +416,7 @@ fn refresh_scene(
         current_usage_received_at,
         current_network_status,
         selected_provider,
+        language,
     ));
 }
 
@@ -411,6 +426,7 @@ fn current_scene(
     current_usage_received_at: Option<Instant>,
     current_network_status: &Option<NetworkStatus>,
     selected_provider: usize,
+    language: Language,
 ) -> Scene {
     if let Some(snapshot) = current_usage {
         let elapsed_since_update_secs = current_usage_received_at
@@ -421,10 +437,11 @@ fn current_scene(
             provider_image_cache,
             selected_provider,
             elapsed_since_update_secs,
+            language,
         );
     }
     if let Some(status) = current_network_status {
-        return network_status_scene(status);
+        return network_status_scene(status, language);
     }
-    waiting_scene()
+    waiting_scene(language)
 }
