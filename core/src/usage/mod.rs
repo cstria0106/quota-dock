@@ -331,7 +331,7 @@ fn build_palette(pixels: &[[u8; 3]]) -> Vec<[u8; 3]> {
     }
 
     let mut buckets = buckets.into_values().collect::<Vec<_>>();
-    buckets.sort_by(|left, right| right.count.cmp(&left.count));
+    buckets.sort_by_key(|bucket| std::cmp::Reverse(bucket.count));
     buckets
         .into_iter()
         .take(MAX_PIXEL_ART_COLORS)
@@ -466,7 +466,7 @@ fn parse_rfc3339_unix(value: &str) -> Option<u64> {
     }
 
     let offset_start = value[19..]
-        .find(|character| matches!(character, 'Z' | 'z' | '+' | '-'))
+        .find(['Z', 'z', '+', '-'])
         .map(|index| 19 + index)?;
     let offset = value.get(offset_start..)?;
     let offset_seconds = if offset.starts_with(['Z', 'z']) {

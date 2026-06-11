@@ -2,10 +2,10 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs};
 use esp_idf_svc::wifi::{BlockingWifi, EspWifi};
@@ -13,12 +13,16 @@ use heapless::String as HeaplessString;
 use serde::{Deserialize, Serialize};
 
 const MAX_FRAME_BODY: usize = 64 * 1024;
+const SERIAL_FRAME_PREFIX: &[u8] = b"QD1:";
+const MAX_ENCODED_FRAME: usize = (MAX_FRAME_BODY + 3) * 2 + SERIAL_FRAME_PREFIX.len() + 2;
 const PROTOCOL_PORT: u16 = 3333;
-const SERIAL_FRAME_MAGIC: &[u8; 4] = b"QDCK";
+const SERIAL_FRAME_VERSION: u8 = 1;
 const COMMAND_QUEUE_CAPACITY: usize = 8;
 const NETWORK_STACK_SIZE: usize = 24 * 1024;
 const PROTOCOL_STACK_SIZE: usize = 18 * 1024;
 const SERIAL_STACK_SIZE: usize = 24 * 1024;
+const SERIAL_IDLE_DELAY_MS: u32 = 5;
+const SERIAL_READ_BUFFER_BYTES: usize = 256;
 const NVS_NAMESPACE: &str = "quota-dock";
 const NVS_WIFI_SSID: &str = "wifi_ssid";
 const NVS_WIFI_PASSWORD: &str = "wifi_pass";
@@ -165,13 +169,8 @@ struct NetworkState {
 }
 
 enum CredentialRequest {
-    Set {
-        credentials: WifiCredentials,
-        response_tx: mpsc::Sender<Result<(), String>>,
-    },
-    Clear {
-        response_tx: mpsc::Sender<Result<(), String>>,
-    },
+    Set { credentials: WifiCredentials },
+    Clear,
 }
 
 pub fn start() -> CommandReceiver {
@@ -207,7 +206,12 @@ fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
         sys_loop,
     )?;
     set_wifi_storage_flash()?;
-    start_serial_task(command_tx.clone(), credential_tx, state.clone());
+    start_serial_task(
+        command_tx.clone(),
+        credential_tx,
+        state.clone(),
+        nvs_partition.clone(),
+    );
 
     set_event(&state, "boot_load_wifi_config");
     let mut protocol_started = false;
@@ -234,55 +238,42 @@ fn network_task(command_tx: CommandSender) -> anyhow::Result<()> {
     }
 
     loop {
-        if let Ok(request) = credential_rx.try_recv() {
-            match request {
-                CredentialRequest::Set {
-                    credentials,
-                    response_tx,
-                } => {
-                    set_event(&state, "save_wifi_config");
-                    let save_result = save_credentials(nvs_partition.clone(), &credentials)
-                        .map_err(|err| format!("{err:?}"));
-                    let should_connect = save_result.is_ok();
-                    let _ = response_tx.send(save_result);
+        let request = match credential_rx.recv() {
+            Ok(request) => request,
+            Err(_) => return Ok(()),
+        };
 
-                    if should_connect {
-                        send_network_status(&command_tx, true, false, None);
-                        set_event(&state, "connect_provisioned_credentials");
-                        if let Err(err) = connect_wifi(&mut wifi, Some(&credentials), state.clone())
-                        {
-                            set_event(&state, "provisioned_wifi_connect_failed");
-                            send_network_status(&command_tx, true, false, None);
-                            println!("Provisioned Wi-Fi credentials failed: {err:?}");
-                        } else if !protocol_started {
-                            send_current_network_status(&command_tx, &state, true);
-                            set_event(&state, "protocol_server_start");
-                            start_protocol_server(command_tx.clone(), state.clone())?;
-                            protocol_started = true;
-                            set_event(&state, "protocol_server_ready");
-                            send_current_network_status(&command_tx, &state, true);
-                        } else {
-                            send_current_network_status(&command_tx, &state, true);
-                        }
-                    }
+        match request {
+            CredentialRequest::Set { credentials } => {
+                send_network_status(&command_tx, true, false, None);
+                set_event(&state, "connect_provisioned_credentials");
+                if let Err(err) = connect_wifi(&mut wifi, Some(&credentials), state.clone()) {
+                    set_event(&state, "provisioned_wifi_connect_failed");
+                    send_network_status(&command_tx, true, false, None);
+                    println!("Provisioned Wi-Fi credentials failed: {err:?}");
+                } else if !protocol_started {
+                    send_current_network_status(&command_tx, &state, true);
+                    set_event(&state, "protocol_server_start");
+                    start_protocol_server(command_tx.clone(), state.clone())?;
+                    protocol_started = true;
+                    set_event(&state, "protocol_server_ready");
+                    send_current_network_status(&command_tx, &state, true);
+                } else {
+                    send_current_network_status(&command_tx, &state, true);
                 }
-                CredentialRequest::Clear { response_tx } => {
-                    set_event(&state, "clear_wifi_config");
-                    let clear_result = clear_credentials(nvs_partition.clone())
-                        .and_then(|_| stop_wifi(&mut wifi, state.clone()))
-                        .map_err(|err| format!("{err:?}"));
-                    let did_clear = clear_result.is_ok();
-                    let _ = response_tx.send(clear_result);
-
-                    if did_clear {
-                        send_network_status(&command_tx, false, false, None);
-                        set_event(&state, "wifi_credentials_cleared");
+            }
+            CredentialRequest::Clear => {
+                set_event(&state, "wifi_credentials_cleared");
+                match stop_wifi(&mut wifi, state.clone()) {
+                    Ok(()) => send_network_status(&command_tx, false, false, None),
+                    Err(err) => {
+                        set_event(&state, "wifi_stop_after_clear_failed");
+                        send_current_network_status(&command_tx, &state, false);
+                        println!("Wi-Fi stop after clear failed: {err:?}");
                     }
                 }
             }
         }
-
-        thread::sleep(Duration::from_secs(5));
     }
 }
 
@@ -314,35 +305,31 @@ fn start_serial_task(
     command_tx: CommandSender,
     credential_tx: mpsc::Sender<CredentialRequest>,
     state: Arc<Mutex<NetworkState>>,
+    nvs_partition: EspDefaultNvsPartition,
 ) {
     thread::Builder::new()
         .stack_size(SERIAL_STACK_SIZE)
         .spawn(move || {
             let mut stdin = io::stdin();
-            let mut stdout = io::stdout();
+            let stdout = io::stdout();
             let mut input = Vec::new();
-            let mut buffer = [0_u8; 128];
+            let mut buffer = [0_u8; SERIAL_READ_BUFFER_BYTES];
 
             loop {
                 match stdin.read(&mut buffer) {
                     Ok(0) => {
-                        thread::sleep(Duration::from_millis(20));
+                        FreeRtos::delay_ms(SERIAL_IDLE_DELAY_MS);
                     }
                     Ok(len) => {
                         input.extend_from_slice(&buffer[..len]);
-                        while let Some(frame) = match try_take_serial_frame(&mut input) {
-                            Ok(frame) => frame,
-                            Err(err) => {
-                                println!("Serial frame failed: {err:?}");
-                                None
-                            }
-                        } {
+                        while let Some(frame) = try_take_serial_frame(&mut input) {
                             let reply = match postcard::from_bytes::<SerialRequest>(&frame) {
                                 Ok(request) => handle_serial_request(
                                     request,
                                     &command_tx,
                                     &credential_tx,
                                     &state,
+                                    &nvs_partition,
                                 ),
                                 Err(err) => {
                                     println!("Invalid serial request: {err}");
@@ -352,6 +339,7 @@ fn start_serial_task(
 
                             match postcard::to_allocvec(&reply) {
                                 Ok(body) => {
+                                    let mut stdout = stdout.lock();
                                     let _ = write_serial_frame(&mut stdout, &body);
                                 }
                                 Err(err) => println!("Serial reply encode failed: {err}"),
@@ -362,7 +350,7 @@ fn start_serial_task(
                         if err.kind() == io::ErrorKind::WouldBlock
                             || err.raw_os_error() == Some(11) =>
                     {
-                        thread::sleep(Duration::from_millis(20));
+                        FreeRtos::delay_ms(SERIAL_IDLE_DELAY_MS);
                     }
                     Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
                     Err(err) => println!("Serial read failed: {err}"),
@@ -377,68 +365,49 @@ fn handle_serial_request(
     command_tx: &CommandSender,
     credential_tx: &mpsc::Sender<CredentialRequest>,
     state: &Arc<Mutex<NetworkState>>,
+    nvs_partition: &EspDefaultNvsPartition,
 ) -> SerialReply {
     match request {
         SerialRequest::Status => SerialReply::Status(current_status(state)),
         SerialRequest::SetWifi { ssid, password } => {
             set_event(state, "serial_set_wifi_received");
-            let (response_tx, response_rx) = mpsc::channel();
-            if let Err(err) = credential_tx.send(CredentialRequest::Set {
-                credentials: WifiCredentials { ssid, password },
-                response_tx,
-            }) {
+            let credentials = WifiCredentials { ssid, password };
+            let save_result = save_credentials(nvs_partition.clone(), &credentials)
+                .map_err(|err| format!("{err:?}"));
+            if let Err(err) = save_result {
                 return SerialReply::Api(ApiResponse {
                     ok: false,
-                    message: format!("wifi credential queue failed: {err}"),
+                    message: format!("wifi credential save failed: {err}"),
                 });
+            }
+            if let Err(err) = credential_tx.send(CredentialRequest::Set { credentials }) {
+                println!("Wi-Fi connect queue after save failed: {err}");
             }
             set_event(state, "serial_set_wifi_queued");
 
-            SerialReply::Api(match response_rx.recv_timeout(Duration::from_secs(25)) {
-                Ok(Ok(())) => ApiResponse {
-                    ok: true,
-                    message: "wifi credentials saved and queued".to_string(),
-                },
-                Ok(Err(err)) => ApiResponse {
-                    ok: false,
-                    message: format!("wifi credential save failed: {err}"),
-                },
-                Err(err) => {
-                    set_event(state, "serial_set_wifi_response_timeout");
-                    ApiResponse {
-                        ok: false,
-                        message: format!("wifi credential save timed out: {err}"),
-                    }
-                }
+            SerialReply::Api(ApiResponse {
+                ok: true,
+                message: "wifi credentials saved".to_string(),
             })
         }
         SerialRequest::ClearWifi => {
             set_event(state, "serial_clear_wifi_received");
-            let (response_tx, response_rx) = mpsc::channel();
-            if let Err(err) = credential_tx.send(CredentialRequest::Clear { response_tx }) {
+            let clear_result =
+                clear_credentials(nvs_partition.clone()).map_err(|err| format!("{err:?}"));
+            if let Err(err) = clear_result {
                 return SerialReply::Api(ApiResponse {
                     ok: false,
-                    message: format!("wifi credential clear queue failed: {err}"),
+                    message: format!("wifi credential clear failed: {err}"),
                 });
+            }
+            if let Err(err) = credential_tx.send(CredentialRequest::Clear) {
+                println!("Wi-Fi stop queue after clear failed: {err}");
             }
             set_event(state, "serial_clear_wifi_queued");
 
-            SerialReply::Api(match response_rx.recv_timeout(Duration::from_secs(25)) {
-                Ok(Ok(())) => ApiResponse {
-                    ok: true,
-                    message: "wifi credentials cleared".to_string(),
-                },
-                Ok(Err(err)) => ApiResponse {
-                    ok: false,
-                    message: format!("wifi credential clear failed: {err}"),
-                },
-                Err(err) => {
-                    set_event(state, "serial_clear_wifi_response_timeout");
-                    ApiResponse {
-                        ok: false,
-                        message: format!("wifi credential clear timed out: {err}"),
-                    }
-                }
+            SerialReply::Api(ApiResponse {
+                ok: true,
+                message: "wifi credentials cleared".to_string(),
             })
         }
         SerialRequest::Command(command) => {
@@ -456,54 +425,123 @@ fn handle_serial_request(
     }
 }
 
-fn try_take_serial_frame(input: &mut Vec<u8>) -> anyhow::Result<Option<Vec<u8>>> {
-    let Some(start) = input
-        .windows(SERIAL_FRAME_MAGIC.len())
-        .position(|window| window == SERIAL_FRAME_MAGIC)
-    else {
-        let keep = SERIAL_FRAME_MAGIC.len().saturating_sub(1);
-        if input.len() > keep {
-            input.drain(..input.len() - keep);
+fn try_take_serial_frame(input: &mut Vec<u8>) -> Option<Vec<u8>> {
+    loop {
+        if input.len() > MAX_ENCODED_FRAME {
+            let drain_to = input
+                .iter()
+                .position(is_line_ending)
+                .map(|position| position + 1)
+                .unwrap_or(input.len());
+            input.drain(..drain_to);
         }
-        return Ok(None);
-    };
-    if start > 0 {
-        input.drain(..start);
-    }
-    if input.len() < SERIAL_FRAME_MAGIC.len() + 4 {
-        return Ok(None);
-    }
 
-    let len_offset = SERIAL_FRAME_MAGIC.len();
-    let len = u32::from_le_bytes(
-        input[len_offset..len_offset + 4]
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid serial frame length"))?,
-    ) as usize;
-    if len > MAX_FRAME_BODY {
-        anyhow::bail!("serial frame too large: {len} bytes");
-    }
+        let end = input.iter().position(is_line_ending)?;
+        let mut line = input.drain(..=end).collect::<Vec<_>>();
+        while line.last().is_some_and(is_line_ending) {
+            line.pop();
+        }
+        if line.is_empty() {
+            continue;
+        }
 
-    let body_offset = len_offset + 4;
-    let frame_len = body_offset + len;
-    if input.len() < frame_len {
-        return Ok(None);
+        let Some(prefix_start) = find_bytes(&line, SERIAL_FRAME_PREFIX) else {
+            continue;
+        };
+        let Some(frame) = decode_hex_ascii(&line[prefix_start + SERIAL_FRAME_PREFIX.len()..])
+        else {
+            continue;
+        };
+        if frame.len() < 3 || frame[0] != SERIAL_FRAME_VERSION {
+            continue;
+        }
+        let crc = u16::from_le_bytes([frame[1], frame[2]]);
+        let body = frame[3..].to_vec();
+        if crc != crc16_ccitt(&body) {
+            continue;
+        }
+        return Some(body);
     }
-
-    let body = input[body_offset..frame_len].to_vec();
-    input.drain(..frame_len);
-    Ok(Some(body))
 }
 
 fn write_serial_frame(output: &mut impl Write, body: &[u8]) -> anyhow::Result<()> {
     if body.len() > MAX_FRAME_BODY {
         anyhow::bail!("serial frame too large: {} bytes", body.len());
     }
-    output.write_all(SERIAL_FRAME_MAGIC)?;
-    output.write_all(&(body.len() as u32).to_le_bytes())?;
-    output.write_all(body)?;
+    let crc = crc16_ccitt(body).to_le_bytes();
+    let mut frame = Vec::with_capacity(SERIAL_FRAME_PREFIX.len() + (body.len() + 3) * 2 + 1);
+    frame.extend_from_slice(SERIAL_FRAME_PREFIX);
+    push_hex_byte(&mut frame, SERIAL_FRAME_VERSION);
+    push_hex_byte(&mut frame, crc[0]);
+    push_hex_byte(&mut frame, crc[1]);
+    for byte in body {
+        push_hex_byte(&mut frame, *byte);
+    }
+    frame.push(b'\n');
+    output.write_all(&frame)?;
     output.flush()?;
     Ok(())
+}
+
+fn is_line_ending(byte: &u8) -> bool {
+    matches!(*byte, b'\n' | b'\r')
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn push_hex_byte(output: &mut Vec<u8>, byte: u8) {
+    output.push(hex_digit(byte >> 4));
+    output.push(hex_digit(byte & 0x0f));
+}
+
+fn hex_digit(nibble: u8) -> u8 {
+    match nibble {
+        0..=9 => b'0' + nibble,
+        10..=15 => b'a' + (nibble - 10),
+        _ => unreachable!("nibble is masked to four bits"),
+    }
+}
+
+fn decode_hex_ascii(input: &[u8]) -> Option<Vec<u8>> {
+    let chunks = input.chunks_exact(2);
+    if !chunks.remainder().is_empty() {
+        return None;
+    }
+    let mut output = Vec::with_capacity(input.len() / 2);
+    for chunk in chunks {
+        let high = hex_value(chunk[0])?;
+        let low = hex_value(chunk[1])?;
+        output.push((high << 4) | low);
+    }
+    Some(output)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn crc16_ccitt(bytes: &[u8]) -> u16 {
+    let mut crc = 0xffff_u16;
+    for byte in bytes {
+        crc ^= u16::from(*byte) << 8;
+        for _ in 0..8 {
+            if crc & 0x8000 == 0 {
+                crc <<= 1;
+            } else {
+                crc = (crc << 1) ^ 0x1021;
+            }
+        }
+    }
+    crc
 }
 
 fn start_protocol_server(

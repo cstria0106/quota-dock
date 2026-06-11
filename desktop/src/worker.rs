@@ -14,6 +14,8 @@ use quota_dock_core::{
 
 use crate::firmware::flash_bundled_firmware;
 
+const SERIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+
 #[derive(Debug)]
 pub enum Task {
     RefreshPorts,
@@ -133,16 +135,16 @@ fn run_task(task: Task) -> TaskResult {
             &port,
             baud,
             &SerialRequest::SetWifi { ssid, password },
-            Duration::from_secs(30),
+            SERIAL_REQUEST_TIMEOUT,
         )),
         Task::ClearWifi { port, baud } => TaskResult::ClearWifi(send_serial(
             &port,
             baud,
             &SerialRequest::ClearWifi,
-            Duration::from_secs(30),
+            SERIAL_REQUEST_TIMEOUT,
         )),
         Task::SerialStatus { port, baud } => {
-            TaskResult::SerialStatus(send_serial_status(&port, baud, Duration::from_secs(6)))
+            TaskResult::SerialStatus(send_serial_status(&port, baud, SERIAL_REQUEST_TIMEOUT))
         }
         Task::HttpStatus { device_url } => TaskResult::HttpStatus(http_status(&device_url)),
         Task::Command {

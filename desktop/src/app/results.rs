@@ -19,7 +19,7 @@ impl QuotaDockApp {
                     match result {
                         Ok(status) => self.handle_serial_status(status),
                         Err(err) => {
-                            self.push_log(format!("serial status failed: {err}"));
+                            self.push_failure_log("serial status failed", &err);
                             self.schedule_next_wifi_poll();
                         }
                     }
@@ -111,7 +111,7 @@ impl QuotaDockApp {
                 self.begin_wifi_poll();
             }
             Ok(response) => self.push_log(format!("wifi rejected: {}", response.message)),
-            Err(err) => self.push_log(format!("wifi failed: {err}")),
+            Err(err) => self.push_failure_log("wifi failed", &err),
         }
     }
 
@@ -124,7 +124,7 @@ impl QuotaDockApp {
                 self.push_log(format!("clear wifi: {}", response.message));
             }
             Ok(response) => self.push_log(format!("clear wifi rejected: {}", response.message)),
-            Err(err) => self.push_log(format!("clear wifi failed: {err}")),
+            Err(err) => self.push_failure_log("clear wifi failed", &err),
         }
     }
 
@@ -199,5 +199,17 @@ impl QuotaDockApp {
             "sync: ok={} providers={} {}",
             report.ok, report.provider_count, report.message
         ));
+    }
+
+    fn push_failure_log(&mut self, label: &str, message: &str) {
+        let mut lines = message.lines();
+        if let Some(first) = lines.next() {
+            self.push_log(format!("{label}: {first}"));
+        } else {
+            self.push_log(label.to_string());
+        }
+        for line in lines {
+            self.push_log(format!("  {line}"));
+        }
     }
 }
