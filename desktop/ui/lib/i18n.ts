@@ -73,6 +73,9 @@ const ko: Catalog = {
   "status.ok": "여유 있음",
   "status.warning": "주의",
   "status.critical": "한도 임박",
+  "status.live": "실시간",
+  "status.estimated": "추정",
+  "status.error": "오류",
   "status.unknown": "상태 미상",
 
   "setup.subtitle": "기기 설정",
@@ -191,6 +194,9 @@ const en: Catalog = {
   "status.ok": "Healthy",
   "status.warning": "Warning",
   "status.critical": "Near limit",
+  "status.live": "Live",
+  "status.estimated": "Estimated",
+  "status.error": "Error",
   "status.unknown": "Unknown",
 
   "setup.subtitle": "Device setup",

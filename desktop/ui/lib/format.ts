@@ -4,11 +4,25 @@ export function boundedPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
-export type UsageStatus = "ok" | "warning" | "critical" | "unknown";
+export type UsageStatus =
+  | "live"
+  | "estimated"
+  | "error"
+  | "ok"
+  | "warning"
+  | "critical"
+  | "unknown";
 
 export function normalizeStatus(status: string): UsageStatus {
-  const value = status.toLowerCase();
-  if (value === "ok" || value === "warning" || value === "critical") {
+  const value = status.trim().toLowerCase();
+  if (
+    value === "live" ||
+    value === "estimated" ||
+    value === "error" ||
+    value === "ok" ||
+    value === "warning" ||
+    value === "critical"
+  ) {
     return value;
   }
   return "unknown";
