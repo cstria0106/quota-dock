@@ -206,4 +206,17 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn send_request_reuses_cached_usage_snapshot() {
+        let mut scheduler = SyncScheduler::default();
+        scheduler.request_send_now();
+
+        assert_eq!(
+            scheduler.should_start(Instant::now(), 60, Some(true), true, false),
+            Some(SyncDecision {
+                refresh_usage: false
+            })
+        );
+    }
 }

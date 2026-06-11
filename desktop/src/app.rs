@@ -777,7 +777,7 @@ impl DesktopController {
         }
         self.setup = SetupFlow::idle();
         self.sync_enabled = true;
-        self.sync_scheduler.request_now();
+        self.sync_scheduler.request_send_now();
     }
 
     fn schedule_usb_scan_now(&mut self) {
