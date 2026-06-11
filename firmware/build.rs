@@ -1,6 +1,9 @@
 #[path = "build_support/bitmap_font_generator.rs"]
 mod bitmap_font_generator;
+#[path = "build_support/firmware_hash.rs"]
+mod firmware_hash;
 
+use std::fs;
 use std::path::PathBuf;
 
 use bitmap_font_generator::{generate_bitmap_font, BitmapFontOptions};
@@ -30,6 +33,10 @@ fn main() {
 
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("out dir"));
+    let firmware_version = std::env::var("CARGO_PKG_VERSION").expect("firmware version");
+    let firmware_hash = firmware_hash::firmware_source_hash(&manifest_dir);
+    println!("cargo:rustc-env=QUOTA_DOCK_FIRMWARE_HASH={}", firmware_hash);
+    write_firmware_metadata(&manifest_dir, &firmware_version, &firmware_hash);
 
     for &(font_name, font_source, font_size, output) in FONTS {
         let options = BitmapFontOptions {
@@ -44,4 +51,18 @@ fn main() {
             panic!("generate bitmap font {font_source}: {err}");
         }
     }
+}
+
+fn write_firmware_metadata(manifest_dir: &std::path::Path, version: &str, hash: &str) {
+    let target_dir = manifest_dir.join("target");
+    fs::create_dir_all(&target_dir).unwrap_or_else(|err| {
+        panic!(
+            "create firmware metadata dir {}: {err}",
+            target_dir.display()
+        )
+    });
+    let path = target_dir.join("firmware-metadata.env");
+    let contents = format!("version={version}\nhash={hash}\n");
+    fs::write(&path, contents)
+        .unwrap_or_else(|err| panic!("write firmware metadata {}: {err}", path.display()));
 }

@@ -77,6 +77,7 @@ APP_ELF="$RELEASE_DIR/quota-dock-firmware"
 APP_BIN="$FLASH_DIR/app.bin"
 BOOTLOADER_BIN="$RELEASE_DIR/bootloader.bin"
 PARTITION_TABLE_BIN="$FLASH_DIR/partition-table.bin"
+FIRMWARE_METADATA="$ROOT_DIR/target/firmware-metadata.env"
 
 mkdir -p "$FLASH_DIR"
 "$ROOT_DIR/.tools/bin/espflash" partition-table \
@@ -93,5 +94,6 @@ mkdir -p "$FLASH_DIR"
     "$APP_ELF" \
     "$APP_BIN" >/dev/null
 cp "$BOOTLOADER_BIN" "$FLASH_DIR/bootloader.bin"
+cp "$FIRMWARE_METADATA" "$FLASH_DIR/firmware-metadata.env"
 
 printf "Flash binaries written to %s\n" "$FLASH_DIR"

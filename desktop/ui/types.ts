@@ -17,6 +17,7 @@ export type CommandName =
   | "scan_usb"
   | "prepare_initial_setup"
   | "confirm_flash_firmware"
+  | "skip_firmware_update"
   | "send_wifi_credentials"
   | "cancel_setup"
   | "sync_now"
@@ -60,7 +61,19 @@ export interface FirmwareSnapshot {
   bootloaderKb: number;
   partitionTableKb: number;
   offset: string;
+  version: string;
+  hash: string;
+  installedVersion?: string | null;
+  installedHash?: string | null;
+  installReason?: FirmwareInstallReason | null;
+  canSkip: boolean;
 }
+
+export type FirmwareInstallReason =
+  | "missing"
+  | "update_available"
+  | "different_firmware"
+  | "unverified";
 
 export interface SetupSnapshot {
   active: boolean;

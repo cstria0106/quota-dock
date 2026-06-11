@@ -19,6 +19,10 @@ pub struct StatusResponse {
     pub connected: bool,
     pub ip: Option<String>,
     pub event: Option<String>,
+    #[serde(default)]
+    pub firmware_version: Option<String>,
+    #[serde(default)]
+    pub firmware_hash: Option<String>,
     pub heap_free: u32,
     pub heap_internal_free: u32,
     pub heap_min_free: u32,

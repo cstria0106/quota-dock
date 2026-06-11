@@ -91,13 +91,32 @@ const ko: Catalog = {
   "setup.firmware.bootloader": "부트로더",
   "setup.firmware.partition": "파티션",
   "setup.firmware.offset": "오프셋",
+  "setup.firmware.version": "번들 버전",
+  "setup.firmware.hash": "번들 해시",
+  "setup.firmware.installedVersion": "설치된 버전",
+  "setup.firmware.installedHash": "설치된 해시",
+  "setup.firmware.ready.missing": "기기에 설치할 펌웨어가 준비되었습니다.",
+  "setup.firmware.ready.update":
+    "현재 버전 {installed}에서 {bundled}로 업데이트할 수 있습니다.",
+  "setup.firmware.ready.different":
+    "설치된 버전은 같지만 펌웨어 해시가 다릅니다. 번들 펌웨어로 덮어쓸 수 있습니다.",
+  "setup.firmware.ready.unverified":
+    "설치된 펌웨어의 버전 또는 해시를 확인할 수 없습니다.",
+  "setup.firmware.update": "업데이트",
+  "setup.firmware.skip": "건너뛰기",
 
   "setup.wifi.ssid": "와이파이 이름",
   "setup.wifi.password": "비밀번호",
   "setup.wifi.submit": "저장하고 연결",
 
   "setup.flash.title": "기기에 설치할까요?",
+  "setup.flash.title.update": "펌웨어를 업데이트할까요?",
+  "setup.flash.title.different": "다른 펌웨어를 덮어쓸까요?",
+  "setup.flash.title.unverified": "펌웨어를 다시 설치할까요?",
   "setup.flash.desc": "확인하면 설치가 바로 시작됩니다.",
+  "setup.flash.desc.update": "확인하면 새 펌웨어 설치가 바로 시작됩니다.",
+  "setup.flash.desc.different": "현재 같은 버전의 다른 빌드를 번들 펌웨어로 교체합니다.",
+  "setup.flash.desc.unverified": "현재 펌웨어를 검증할 수 없어 번들 펌웨어로 교체합니다.",
   "setup.flash.note1": "기기의 기존 내용이 새로 덮어써집니다.",
   "setup.flash.note2": "설치하는 동안 USB 연결을 유지하세요.",
   "setup.flash.note3": "진행 중 앱·케이블·전원을 끊지 마세요.",
@@ -190,13 +209,34 @@ const en: Catalog = {
   "setup.firmware.bootloader": "Bootloader",
   "setup.firmware.partition": "Partition",
   "setup.firmware.offset": "Offset",
+  "setup.firmware.version": "Bundled version",
+  "setup.firmware.hash": "Bundled hash",
+  "setup.firmware.installedVersion": "Installed version",
+  "setup.firmware.installedHash": "Installed hash",
+  "setup.firmware.ready.missing": "Firmware is ready to install on the device.",
+  "setup.firmware.ready.update":
+    "Update from version {installed} to {bundled}.",
+  "setup.firmware.ready.different":
+    "The installed version matches, but the firmware hash is different. You can replace it with the bundled firmware.",
+  "setup.firmware.ready.unverified":
+    "The installed firmware version or hash cannot be verified.",
+  "setup.firmware.update": "Update",
+  "setup.firmware.skip": "Skip",
 
   "setup.wifi.ssid": "Wi-Fi name",
   "setup.wifi.password": "Password",
   "setup.wifi.submit": "Save and connect",
 
   "setup.flash.title": "Install to the device?",
+  "setup.flash.title.update": "Update firmware?",
+  "setup.flash.title.different": "Replace different firmware?",
+  "setup.flash.title.unverified": "Reinstall firmware?",
   "setup.flash.desc": "Installation starts as soon as you confirm.",
+  "setup.flash.desc.update": "The new firmware install starts as soon as you confirm.",
+  "setup.flash.desc.different":
+    "The current same-version build will be replaced with the bundled firmware.",
+  "setup.flash.desc.unverified":
+    "The current firmware cannot be verified and will be replaced with the bundled firmware.",
   "setup.flash.note1": "The device's existing contents will be overwritten.",
   "setup.flash.note2": "Keep the USB connected during installation.",
   "setup.flash.note3": "Don't disconnect the app, cable, or power while it runs.",

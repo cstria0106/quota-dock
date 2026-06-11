@@ -12,6 +12,8 @@ pub struct BundledFirmware {
     pub bootloader_bytes: usize,
     pub partition_table_bytes: usize,
     pub offset: &'static str,
+    pub version: &'static str,
+    pub hash: &'static str,
 }
 
 pub fn bundled_firmware() -> BundledFirmware {
@@ -20,6 +22,8 @@ pub fn bundled_firmware() -> BundledFirmware {
         bootloader_bytes: BOOTLOADER_BIN.len(),
         partition_table_bytes: PARTITION_TABLE_BIN.len(),
         offset: DEFAULT_APP_OFFSET,
+        version: env!("QUOTA_DOCK_FIRMWARE_VERSION"),
+        hash: env!("QUOTA_DOCK_FIRMWARE_HASH"),
     }
 }
 

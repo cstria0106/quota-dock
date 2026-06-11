@@ -1,4 +1,5 @@
 import {
+  ArrowRight,
   BadgeCheck,
   CircleCheck,
   Cpu,
@@ -34,6 +35,7 @@ import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type {
   AppSnapshot,
+  FirmwareInstallReason,
   RunCommand,
   SetupSnapshot,
   SetupStage,
@@ -65,6 +67,7 @@ export function SetupView({
   const { advanced, t } = useSettings();
   const setup = snapshot.setup;
   const StageIcon = setupIcon(setup.stage);
+  const firmwareReason = setup.firmware.installReason ?? "missing";
   const subtitle =
     advanced && setup.port
       ? t("setup.subtitle.port", { port: setup.port })
@@ -136,8 +139,10 @@ export function SetupView({
             <div className="mb-1 grid size-11 place-items-center rounded-lg bg-red-50 text-red-700">
               <TriangleAlert className="size-5" />
             </div>
-            <DialogTitle>{t("setup.flash.title")}</DialogTitle>
-            <DialogDescription>{t("setup.flash.desc")}</DialogDescription>
+            <DialogTitle>{firmwareFlashTitle(firmwareReason, t)}</DialogTitle>
+            <DialogDescription>
+              {firmwareFlashDescription(firmwareReason, t)}
+            </DialogDescription>
           </DialogHeader>
           <ul className="grid gap-2 text-sm text-muted-foreground">
             <li>{t("setup.flash.note1")}</li>
@@ -213,6 +218,9 @@ function SetupStageBody({
   if (setup.stage === "needs_flash" || setup.stage === "flashing") {
     return (
       <div className="grid w-full gap-4">
+        <p className="text-sm text-muted-foreground">
+          {firmwareReadyText(setup, t)}
+        </p>
         {advanced ? (
           <div className="grid overflow-hidden rounded-lg border bg-card text-left sm:grid-cols-4">
             <FirmwareCell label={t("setup.firmware.app")} value={`${setup.firmware.appKb} KB`} />
@@ -225,12 +233,18 @@ function SetupStageBody({
               value={`${setup.firmware.partitionTableKb} KB`}
             />
             <FirmwareCell label={t("setup.firmware.offset")} value={setup.firmware.offset} />
+            <FirmwareCell label={t("setup.firmware.version")} value={setup.firmware.version} />
+            <FirmwareCell label={t("setup.firmware.hash")} value={setup.firmware.hash} />
+            <FirmwareCell
+              label={t("setup.firmware.installedVersion")}
+              value={firmwareValue(setup.firmware.installedVersion, t)}
+            />
+            <FirmwareCell
+              label={t("setup.firmware.installedHash")}
+              value={firmwareValue(setup.firmware.installedHash, t)}
+            />
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            {t("setup.firmware.ready")}
-          </p>
-        )}
+        ) : null}
         <div className="flex flex-wrap items-center justify-center gap-3">
           <Button
             type="button"
@@ -239,8 +253,19 @@ function SetupStageBody({
             onClick={() => onFlashConfirmOpenChange(true)}
           >
             <Download />
-            {t("setup.firmware.install")}
+            {firmwareActionLabel(setup.firmware.installReason, t)}
           </Button>
+          {setup.firmware.canSkip ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={setup.stage === "flashing"}
+              onClick={() => void onRunCommand("skip_firmware_update")}
+            >
+              <ArrowRight />
+              {t("setup.firmware.skip")}
+            </Button>
+          ) : null}
           {setup.stage === "flashing" ? <Spinner /> : null}
         </div>
       </div>
@@ -339,9 +364,71 @@ function FirmwareCell({ label, value }: { label: string; value: string }) {
       <div className="text-xs font-medium uppercase text-muted-foreground">
         {label}
       </div>
-      <div className="truncate font-semibold">{value}</div>
+      <div className="truncate font-semibold" title={value}>
+        {value}
+      </div>
     </div>
   );
+}
+
+function firmwareReadyText(setup: SetupSnapshot, t: TFunction): string {
+  const installed = firmwareValue(setup.firmware.installedVersion, t);
+  switch (setup.firmware.installReason ?? "missing") {
+    case "update_available":
+      return t("setup.firmware.ready.update", {
+        installed,
+        bundled: setup.firmware.version,
+      });
+    case "different_firmware":
+      return t("setup.firmware.ready.different");
+    case "unverified":
+      return t("setup.firmware.ready.unverified");
+    case "missing":
+      return t("setup.firmware.ready.missing");
+  }
+}
+
+function firmwareActionLabel(
+  reason: FirmwareInstallReason | null | undefined,
+  t: TFunction,
+): string {
+  return reason === "update_available"
+    ? t("setup.firmware.update")
+    : t("setup.firmware.install");
+}
+
+function firmwareFlashTitle(reason: FirmwareInstallReason, t: TFunction): string {
+  switch (reason) {
+    case "update_available":
+      return t("setup.flash.title.update");
+    case "different_firmware":
+      return t("setup.flash.title.different");
+    case "unverified":
+      return t("setup.flash.title.unverified");
+    case "missing":
+      return t("setup.flash.title");
+  }
+}
+
+function firmwareFlashDescription(
+  reason: FirmwareInstallReason,
+  t: TFunction,
+): string {
+  switch (reason) {
+    case "update_available":
+      return t("setup.flash.desc.update");
+    case "different_firmware":
+      return t("setup.flash.desc.different");
+    case "unverified":
+      return t("setup.flash.desc.unverified");
+    case "missing":
+      return t("setup.flash.desc");
+  }
+}
+
+function firmwareValue(value: string | null | undefined, t: TFunction): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : t("common.dash");
 }
 
 function setupStepIndex(stage: SetupStage): number {

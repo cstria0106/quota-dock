@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -45,6 +46,7 @@ pub fn run() {
             scan_usb,
             prepare_initial_setup,
             confirm_flash_firmware,
+            skip_firmware_update,
             send_wifi_credentials,
             cancel_setup,
             sync_now,
@@ -125,6 +127,14 @@ fn confirm_flash_firmware(
     mutate_and_snapshot(&state, &app, |controller| {
         controller.confirm_flash_firmware()
     })
+}
+
+#[tauri::command]
+fn skip_firmware_update(
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| controller.skip_firmware_update())
 }
 
 #[tauri::command]
@@ -627,6 +637,39 @@ impl DesktopController {
                 bootloader_kb: self.firmware.bootloader_bytes / 1024,
                 partition_table_kb: self.firmware.partition_table_bytes / 1024,
                 offset: self.firmware.offset.to_string(),
+                version: self.firmware.version.to_string(),
+                hash: self.firmware.hash.to_string(),
+                installed_version: self
+                    .setup
+                    .firmware_prompt
+                    .as_ref()
+                    .and_then(|prompt| prompt.installed_version.clone())
+                    .or_else(|| {
+                        self.status
+                            .as_ref()
+                            .and_then(|status| status.firmware_version.clone())
+                    }),
+                installed_hash: self
+                    .setup
+                    .firmware_prompt
+                    .as_ref()
+                    .and_then(|prompt| prompt.installed_hash.clone())
+                    .or_else(|| {
+                        self.status
+                            .as_ref()
+                            .and_then(|status| status.firmware_hash.clone())
+                    }),
+                install_reason: self
+                    .setup
+                    .firmware_prompt
+                    .as_ref()
+                    .map(|prompt| prompt.reason),
+                can_skip: self
+                    .setup
+                    .firmware_prompt
+                    .as_ref()
+                    .map(|prompt| prompt.can_skip)
+                    .unwrap_or(false),
             },
             status: self.status.clone(),
         }
@@ -657,7 +700,14 @@ impl DesktopController {
             SetupStage::Idle => "준비 완료",
             SetupStage::WaitingForBoard => "QuotaDock 보드를 USB로 연결해 주세요",
             SetupStage::CheckingFirmware => "보드 상태를 확인하는 중입니다",
-            SetupStage::NeedsFlash => "펌웨어 설치가 필요합니다",
+            SetupStage::NeedsFlash => match self.setup.firmware_prompt_reason() {
+                Some(FirmwareInstallReason::UpdateAvailable) => "펌웨어 업데이트가 있습니다",
+                Some(FirmwareInstallReason::DifferentFirmware) => {
+                    "같은 버전의 다른 펌웨어가 설치되어 있습니다"
+                }
+                Some(FirmwareInstallReason::Unverified) => "펌웨어 정보를 확인할 수 없습니다",
+                Some(FirmwareInstallReason::Missing) | None => "펌웨어 설치가 필요합니다",
+            },
             SetupStage::Flashing => "펌웨어를 설치하는 중입니다",
             SetupStage::Wifi => "Wi-Fi 정보를 입력해 주세요",
             SetupStage::SendingWifi => "Wi-Fi 정보를 보드로 전송하는 중입니다",
@@ -672,7 +722,20 @@ impl DesktopController {
             SetupStage::Idle => "Dock 화면으로 이동합니다.",
             SetupStage::WaitingForBoard => "지원 보드가 감지되면 다음 단계로 자동 이동합니다.",
             SetupStage::CheckingFirmware => "USB 연결을 유지해 주세요.",
-            SetupStage::NeedsFlash => "펌웨어 설치 버튼을 누른 뒤 확인하면 설치가 시작됩니다.",
+            SetupStage::NeedsFlash => match self.setup.firmware_prompt_reason() {
+                Some(FirmwareInstallReason::UpdateAvailable) => {
+                    "최신 번들 펌웨어를 설치하거나 건너뛰고 계속할 수 있습니다."
+                }
+                Some(FirmwareInstallReason::DifferentFirmware) => {
+                    "기기의 기존 펌웨어를 덮어쓸지 확인해 주세요."
+                }
+                Some(FirmwareInstallReason::Unverified) => {
+                    "현재 펌웨어를 검증할 수 없어 재설치를 권장합니다."
+                }
+                Some(FirmwareInstallReason::Missing) | None => {
+                    "펌웨어 설치 버튼을 누른 뒤 확인하면 설치가 시작됩니다."
+                }
+            },
             SetupStage::Flashing => "케이블, 앱, 전원을 그대로 유지해 주세요.",
             SetupStage::Wifi => "보드가 사용할 네트워크 이름과 비밀번호를 입력합니다.",
             SetupStage::SendingWifi => "잠시만 기다려 주세요.",
@@ -823,14 +886,10 @@ impl DesktopController {
                 self.push_log(format!("board: {}", self.settings.serial_port.as_str()));
 
                 if let Some(status) = report.firmware_status {
-                    self.status = Some(status.clone());
-                    if self.save_ip_from_status(&status) && !self.setup.force_reconfigure {
-                        self.setup.stage = SetupStage::VerifyingConnection;
-                        self.begin_http_verify();
-                    } else {
-                        self.setup.stage = SetupStage::Wifi;
-                    }
+                    self.handle_detected_firmware_status(status);
                 } else {
+                    self.status = None;
+                    self.setup.firmware_prompt = Some(FirmwareInstallPrompt::missing());
                     self.setup.stage = SetupStage::NeedsFlash;
                 }
             }
@@ -853,6 +912,88 @@ impl DesktopController {
         self.setup.stage = SetupStage::Flashing;
         self.flash_firmware();
         Ok(())
+    }
+
+    fn skip_firmware_update(&mut self) -> Result<(), String> {
+        if self.setup.stage != SetupStage::NeedsFlash {
+            return Err("건너뛸 펌웨어 업데이트가 없습니다.".to_string());
+        }
+        let Some(prompt) = self.setup.firmware_prompt.as_ref() else {
+            return Err("건너뛸 펌웨어 업데이트가 없습니다.".to_string());
+        };
+        if !prompt.can_skip {
+            return Err("펌웨어가 설치되어 있지 않아 건너뛸 수 없습니다.".to_string());
+        }
+        let Some(status) = self.status.clone() else {
+            return Err("기기 펌웨어 상태를 확인하지 못했습니다.".to_string());
+        };
+
+        self.setup.firmware_prompt = None;
+        self.push_log("firmware: update skipped".to_string());
+        self.continue_after_firmware_check(&status);
+        Ok(())
+    }
+
+    fn handle_detected_firmware_status(&mut self, status: StatusResponse) {
+        self.status = Some(status.clone());
+        if let Some(prompt) = self.firmware_install_prompt(&status) {
+            self.setup.firmware_prompt = Some(prompt);
+            self.setup.stage = SetupStage::NeedsFlash;
+        } else {
+            self.setup.firmware_prompt = None;
+            self.continue_after_firmware_check(&status);
+        }
+    }
+
+    fn continue_after_firmware_check(&mut self, status: &StatusResponse) {
+        if self.save_ip_from_status(status) && !self.setup.force_reconfigure {
+            self.setup.stage = SetupStage::VerifyingConnection;
+            self.begin_http_verify();
+        } else {
+            self.setup.stage = SetupStage::Wifi;
+        }
+    }
+
+    fn firmware_install_prompt(&self, status: &StatusResponse) -> Option<FirmwareInstallPrompt> {
+        let installed_version = non_empty_owned(status.firmware_version.as_deref());
+        let installed_hash = non_empty_owned(status.firmware_hash.as_deref());
+
+        let Some(version) = installed_version.as_deref() else {
+            return Some(FirmwareInstallPrompt::new(
+                FirmwareInstallReason::Unverified,
+                true,
+                installed_version,
+                installed_hash,
+            ));
+        };
+
+        if version == self.firmware.version {
+            return match installed_hash.as_deref() {
+                Some(hash) if hash == self.firmware.hash => None,
+                Some(_) => Some(FirmwareInstallPrompt::new(
+                    FirmwareInstallReason::DifferentFirmware,
+                    true,
+                    installed_version,
+                    installed_hash,
+                )),
+                None => Some(FirmwareInstallPrompt::new(
+                    FirmwareInstallReason::Unverified,
+                    true,
+                    installed_version,
+                    installed_hash,
+                )),
+            };
+        }
+
+        match compare_semver(version, self.firmware.version) {
+            Some(Ordering::Greater) => None,
+            _ => Some(FirmwareInstallPrompt::new(
+                FirmwareInstallReason::UpdateAvailable,
+                true,
+                installed_version,
+                installed_hash,
+            )),
+        }
     }
 
     fn flash_firmware(&mut self) {
@@ -982,12 +1123,8 @@ impl DesktopController {
         match self.setup.serial_poll_kind {
             Some(SerialPollKind::FirmwareReady) => {
                 self.stop_serial_poll();
-                if self.save_ip_from_status(&status) && !self.setup.force_reconfigure {
-                    self.setup.stage = SetupStage::VerifyingConnection;
-                    self.begin_http_verify();
-                } else {
-                    self.setup.stage = SetupStage::Wifi;
-                }
+                self.setup.firmware_prompt = None;
+                self.continue_after_firmware_check(&status);
             }
             Some(SerialPollKind::WifiConnect) => {
                 if self.save_ip_from_status(&status) {
@@ -1134,7 +1271,9 @@ impl DesktopController {
             .unwrap_or_else(|| "png".to_string());
         let dir = self.images_dir();
         let dest = dir.join(format!("{provider_id}.{extension}"));
-        if let Err(err) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::copy(src, &dest).map(|_| ())) {
+        if let Err(err) =
+            std::fs::create_dir_all(&dir).and_then(|()| std::fs::copy(src, &dest).map(|_| ()))
+        {
             self.push_log(format!(
                 "{provider_id} image copy failed ({err}), using original path"
             ));
@@ -1532,6 +1671,7 @@ struct SetupFlow {
     serial_poll_next: Option<Instant>,
     http_poll_until: Option<Instant>,
     http_poll_next: Option<Instant>,
+    firmware_prompt: Option<FirmwareInstallPrompt>,
     last_error: Option<String>,
 }
 
@@ -1556,6 +1696,7 @@ impl SetupFlow {
             serial_poll_next: None,
             http_poll_until: None,
             http_poll_next: None,
+            firmware_prompt: None,
             last_error: None,
         }
     }
@@ -1572,8 +1713,13 @@ impl SetupFlow {
             serial_poll_next: None,
             http_poll_until: None,
             http_poll_next: None,
+            firmware_prompt: None,
             last_error: None,
         }
+    }
+
+    fn firmware_prompt_reason(&self) -> Option<FirmwareInstallReason> {
+        self.firmware_prompt.as_ref().map(|prompt| prompt.reason)
     }
 }
 
@@ -1603,6 +1749,43 @@ enum SetupStage {
     ConnectingWifi,
     VerifyingConnection,
     Complete,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FirmwareInstallReason {
+    Missing,
+    UpdateAvailable,
+    DifferentFirmware,
+    Unverified,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FirmwareInstallPrompt {
+    reason: FirmwareInstallReason,
+    can_skip: bool,
+    installed_version: Option<String>,
+    installed_hash: Option<String>,
+}
+
+impl FirmwareInstallPrompt {
+    fn new(
+        reason: FirmwareInstallReason,
+        can_skip: bool,
+        installed_version: Option<String>,
+        installed_hash: Option<String>,
+    ) -> Self {
+        Self {
+            reason,
+            can_skip,
+            installed_version,
+            installed_hash,
+        }
+    }
+
+    fn missing() -> Self {
+        Self::new(FirmwareInstallReason::Missing, false, None, None)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1637,6 +1820,12 @@ struct FirmwareSnapshot {
     bootloader_kb: usize,
     partition_table_kb: usize,
     offset: String,
+    version: String,
+    hash: String,
+    installed_version: Option<String>,
+    installed_hash: Option<String>,
+    install_reason: Option<FirmwareInstallReason>,
+    can_skip: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1708,6 +1897,84 @@ fn normalize_device_language(value: &str) -> Result<String, String> {
         "en" | "en-us" => Ok("en".to_string()),
         "ko" | "ko-kr" => Ok("ko".to_string()),
         _ => Err(format!("지원하지 않는 보드 언어입니다: {value}")),
+    }
+}
+
+fn non_empty_owned(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn compare_semver(left: &str, right: &str) -> Option<Ordering> {
+    let left_core = parse_semver_core(left)?;
+    let right_core = parse_semver_core(right)?;
+    match left_core.cmp(&right_core) {
+        Ordering::Equal => compare_semver_prerelease(left, right),
+        ordering => Some(ordering),
+    }
+}
+
+fn parse_semver_core(version: &str) -> Option<[u64; 3]> {
+    let version = version.trim();
+    let core_end = version
+        .find(|ch| ch == '-' || ch == '+')
+        .unwrap_or(version.len());
+    let mut parts = version[..core_end].split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = parts.next()?.parse::<u64>().ok()?;
+    let patch = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some([major, minor, patch])
+}
+
+fn compare_semver_prerelease(left: &str, right: &str) -> Option<Ordering> {
+    match (semver_prerelease(left), semver_prerelease(right)) {
+        (None, None) => Some(Ordering::Equal),
+        (None, Some(_)) => Some(Ordering::Greater),
+        (Some(_), None) => Some(Ordering::Less),
+        (Some(left), Some(right)) => Some(compare_prerelease(left, right)),
+    }
+}
+
+fn semver_prerelease(version: &str) -> Option<&str> {
+    let prerelease = version.split_once('-')?.1;
+    Some(
+        prerelease
+            .split_once('+')
+            .map(|(value, _)| value)
+            .unwrap_or(prerelease),
+    )
+    .filter(|value| !value.is_empty())
+}
+
+fn compare_prerelease(left: &str, right: &str) -> Ordering {
+    let mut left_parts = left.split('.');
+    let mut right_parts = right.split('.');
+    loop {
+        match (left_parts.next(), right_parts.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(left), Some(right)) => {
+                let ordering = compare_prerelease_part(left, right);
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+        }
+    }
+}
+
+fn compare_prerelease_part(left: &str, right: &str) -> Ordering {
+    match (left.parse::<u64>(), right.parse::<u64>()) {
+        (Ok(left), Ok(right)) => left.cmp(&right),
+        (Ok(_), Err(_)) => Ordering::Less,
+        (Err(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => left.cmp(right),
     }
 }
 
@@ -1812,6 +2079,85 @@ mod tests {
     }
 
     #[test]
+    fn older_firmware_requires_skippable_update() {
+        let mut controller = DesktopController::new_for_test(DesktopSettings::default());
+        let bundled_hash = controller.firmware.hash;
+
+        controller.handle_board_detection(Ok(BoardDetectionReport {
+            port: Some("/dev/ttyACM0".to_string()),
+            firmware_status: Some(status_with_firmware(Some("0.0.0"), Some(bundled_hash))),
+        }));
+
+        assert_eq!(controller.setup.stage, SetupStage::NeedsFlash);
+        assert_eq!(
+            controller.setup.firmware_prompt_reason(),
+            Some(FirmwareInstallReason::UpdateAvailable)
+        );
+        assert!(controller
+            .setup
+            .firmware_prompt
+            .as_ref()
+            .map(|prompt| prompt.can_skip)
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn same_version_different_hash_requires_confirmation() {
+        let mut controller = DesktopController::new_for_test(DesktopSettings::default());
+        let bundled_version = controller.firmware.version;
+
+        controller.handle_board_detection(Ok(BoardDetectionReport {
+            port: Some("/dev/ttyACM0".to_string()),
+            firmware_status: Some(status_with_firmware(
+                Some(bundled_version),
+                Some("different"),
+            )),
+        }));
+
+        assert_eq!(controller.setup.stage, SetupStage::NeedsFlash);
+        assert_eq!(
+            controller.setup.firmware_prompt_reason(),
+            Some(FirmwareInstallReason::DifferentFirmware)
+        );
+    }
+
+    #[test]
+    fn matching_firmware_continues_setup() {
+        let mut controller = DesktopController::new_for_test(DesktopSettings::default());
+        let bundled_version = controller.firmware.version;
+        let bundled_hash = controller.firmware.hash;
+
+        controller.handle_board_detection(Ok(BoardDetectionReport {
+            port: Some("/dev/ttyACM0".to_string()),
+            firmware_status: Some(status_with_firmware(
+                Some(bundled_version),
+                Some(bundled_hash),
+            )),
+        }));
+
+        assert_eq!(controller.setup.stage, SetupStage::Wifi);
+        assert!(controller.setup.firmware_prompt.is_none());
+    }
+
+    #[test]
+    fn firmware_update_can_be_skipped() {
+        let mut controller = DesktopController::new_for_test(DesktopSettings::default());
+        let bundled_hash = controller.firmware.hash;
+
+        controller.handle_board_detection(Ok(BoardDetectionReport {
+            port: Some("/dev/ttyACM0".to_string()),
+            firmware_status: Some(status_with_firmware(Some("0.0.0"), Some(bundled_hash))),
+        }));
+
+        controller
+            .skip_firmware_update()
+            .expect("skippable update should continue setup");
+
+        assert_eq!(controller.setup.stage, SetupStage::Wifi);
+        assert!(controller.setup.firmware_prompt.is_none());
+    }
+
+    #[test]
     fn flash_starts_only_after_confirmation() {
         let mut controller = DesktopController::new_for_test(DesktopSettings::default());
         controller.setup.stage = SetupStage::NeedsFlash;
@@ -1824,6 +2170,29 @@ mod tests {
 
         assert_eq!(controller.setup.stage, SetupStage::Flashing);
         assert!(controller.flash_running);
+    }
+
+    #[test]
+    fn semver_prerelease_is_older_than_release() {
+        assert_eq!(
+            compare_semver("1.0.0-alpha.1", "1.0.0"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(compare_semver("1.2.0", "1.1.9"), Some(Ordering::Greater));
+    }
+
+    fn status_with_firmware(version: Option<&str>, hash: Option<&str>) -> StatusResponse {
+        StatusResponse {
+            mode: "station".to_string(),
+            connected: false,
+            ip: None,
+            event: None,
+            firmware_version: version.map(str::to_string),
+            firmware_hash: hash.map(str::to_string),
+            heap_free: 1,
+            heap_internal_free: 1,
+            heap_min_free: 1,
+        }
     }
 }
 
