@@ -1,13 +1,19 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { useSettings } from "@/lib/settings";
 
 export function ActivityLog({ lines }: { lines: string[] }) {
+  const { advanced, t } = useSettings();
+  if (!advanced) {
+    return null;
+  }
+
   const visibleLines = lines.slice(-80);
 
   return (
     <details className="rounded-lg border bg-card">
       <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-        Activity
+        {t("activity.title")}
       </summary>
       <Separator />
       <ScrollArea className="h-40">

@@ -29,6 +29,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { TFunction } from "@/lib/i18n";
+import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type {
   AppSnapshot,
@@ -60,14 +62,21 @@ export function SetupView({
   wifiPassword: string;
   wifiSsid: string;
 }) {
+  const { advanced, t } = useSettings();
   const setup = snapshot.setup;
   const StageIcon = setupIcon(setup.stage);
+  const subtitle =
+    advanced && setup.port
+      ? t("setup.subtitle.port", { port: setup.port })
+      : setup.port
+        ? t("setup.subtitle")
+        : t("setup.subtitle.waiting");
 
   return (
-    <main className="min-h-screen bg-background px-4 py-5 text-foreground sm:px-7">
-      <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] w-full max-w-6xl flex-col gap-5">
+    <main className="h-full overflow-y-auto bg-background px-4 py-5 text-foreground sm:px-7">
+      <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col gap-5">
         <AppHeader
-          subtitle={setup.port ?? "USB 대기 중"}
+          subtitle={subtitle}
           actions={
             setup.canCancel ? (
               <Button
@@ -76,13 +85,13 @@ export function SetupView({
                 onClick={() => void onRunCommand("cancel_setup")}
               >
                 <X />
-                닫기
+                {t("setup.close")}
               </Button>
             ) : null
           }
         />
 
-        <SetupSteps stage={setup.stage} />
+        <SetupSteps stage={setup.stage} t={t} />
 
         <section className="mx-auto grid w-full max-w-3xl flex-1 place-items-center py-3 text-center">
           <div className="grid w-full justify-items-center gap-4">
@@ -104,12 +113,14 @@ export function SetupView({
             </div>
             <ErrorNotice message={setup.lastError ?? commandError} />
             <SetupStageBody
+              advanced={advanced}
               onFlashConfirmOpenChange={onFlashConfirmOpenChange}
               onRunCommand={onRunCommand}
               onSubmitWifi={onSubmitWifi}
               onUpdatePassword={onUpdatePassword}
               onUpdateSsid={onUpdateSsid}
               setup={setup}
+              t={t}
               wifiPassword={wifiPassword}
               wifiSsid={wifiSsid}
             />
@@ -125,15 +136,13 @@ export function SetupView({
             <div className="mb-1 grid size-11 place-items-center rounded-lg bg-red-50 text-red-700">
               <TriangleAlert className="size-5" />
             </div>
-            <DialogTitle>펌웨어를 설치할까요?</DialogTitle>
-            <DialogDescription>
-              확인하면 보드 플래시가 바로 시작됩니다.
-            </DialogDescription>
+            <DialogTitle>{t("setup.flash.title")}</DialogTitle>
+            <DialogDescription>{t("setup.flash.desc")}</DialogDescription>
           </DialogHeader>
           <ul className="grid gap-2 text-sm text-muted-foreground">
-            <li>기존 보드 플래시 내용이 덮어써집니다.</li>
-            <li>USB 연결을 유지해야 합니다.</li>
-            <li>진행 중 앱, 케이블, 전원을 끊으면 안 됩니다.</li>
+            <li>{t("setup.flash.note1")}</li>
+            <li>{t("setup.flash.note2")}</li>
+            <li>{t("setup.flash.note3")}</li>
           </ul>
           <DialogFooter>
             <Button
@@ -141,7 +150,7 @@ export function SetupView({
               variant="outline"
               onClick={() => onFlashConfirmOpenChange(false)}
             >
-              취소
+              {t("setup.flash.cancel")}
             </Button>
             <Button
               type="button"
@@ -152,7 +161,7 @@ export function SetupView({
               }}
             >
               <Download />
-              설치
+              {t("setup.flash.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -162,21 +171,25 @@ export function SetupView({
 }
 
 function SetupStageBody({
+  advanced,
   onFlashConfirmOpenChange,
   onRunCommand,
   onSubmitWifi,
   onUpdatePassword,
   onUpdateSsid,
   setup,
+  t,
   wifiPassword,
   wifiSsid,
 }: {
+  advanced: boolean;
   onFlashConfirmOpenChange: (open: boolean) => void;
   onRunCommand: RunCommand;
   onSubmitWifi: () => void;
   onUpdatePassword: (value: string) => void;
   onUpdateSsid: (value: string) => void;
   setup: SetupSnapshot;
+  t: TFunction;
   wifiPassword: string;
   wifiSsid: string;
 }) {
@@ -191,7 +204,7 @@ function SetupStageBody({
           onClick={() => void onRunCommand("scan_usb")}
         >
           <RefreshCw />
-          다시 검색
+          {t("setup.rescan")}
         </Button>
       </div>
     );
@@ -200,18 +213,24 @@ function SetupStageBody({
   if (setup.stage === "needs_flash" || setup.stage === "flashing") {
     return (
       <div className="grid w-full gap-4">
-        <div className="grid overflow-hidden rounded-lg border bg-card text-left sm:grid-cols-4">
-          <FirmwareCell label="App" value={`${setup.firmware.appKb} KB`} />
-          <FirmwareCell
-            label="Bootloader"
-            value={`${setup.firmware.bootloaderKb} KB`}
-          />
-          <FirmwareCell
-            label="Partition"
-            value={`${setup.firmware.partitionTableKb} KB`}
-          />
-          <FirmwareCell label="Offset" value={setup.firmware.offset} />
-        </div>
+        {advanced ? (
+          <div className="grid overflow-hidden rounded-lg border bg-card text-left sm:grid-cols-4">
+            <FirmwareCell label={t("setup.firmware.app")} value={`${setup.firmware.appKb} KB`} />
+            <FirmwareCell
+              label={t("setup.firmware.bootloader")}
+              value={`${setup.firmware.bootloaderKb} KB`}
+            />
+            <FirmwareCell
+              label={t("setup.firmware.partition")}
+              value={`${setup.firmware.partitionTableKb} KB`}
+            />
+            <FirmwareCell label={t("setup.firmware.offset")} value={setup.firmware.offset} />
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {t("setup.firmware.ready")}
+          </p>
+        )}
         <div className="flex flex-wrap items-center justify-center gap-3">
           <Button
             type="button"
@@ -220,7 +239,7 @@ function SetupStageBody({
             onClick={() => onFlashConfirmOpenChange(true)}
           >
             <Download />
-            펌웨어 설치
+            {t("setup.firmware.install")}
           </Button>
           {setup.stage === "flashing" ? <Spinner /> : null}
         </div>
@@ -245,7 +264,7 @@ function SetupStageBody({
         }}
       >
         <div className="grid gap-2">
-          <Label htmlFor="wifi-ssid">Wi-Fi 이름</Label>
+          <Label htmlFor="wifi-ssid">{t("setup.wifi.ssid")}</Label>
           <Input
             id="wifi-ssid"
             autoComplete="off"
@@ -255,7 +274,7 @@ function SetupStageBody({
           />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="wifi-password">비밀번호</Label>
+          <Label htmlFor="wifi-password">{t("setup.wifi.password")}</Label>
           <Input
             id="wifi-password"
             type="password"
@@ -267,7 +286,7 @@ function SetupStageBody({
         </div>
         <Button type="submit" disabled={busy} className="justify-self-start">
           <Send />
-          저장하고 연결
+          {t("setup.wifi.submit")}
         </Button>
         {busy ? (
           <div className="flex justify-center">
@@ -281,13 +300,13 @@ function SetupStageBody({
   return <Spinner />;
 }
 
-function SetupSteps({ stage }: { stage: SetupStage }) {
+function SetupSteps({ stage, t }: { stage: SetupStage; t: TFunction }) {
   const activeIndex = setupStepIndex(stage);
   const steps: Array<{ icon: LucideIcon; label: string; stage: SetupStage }> = [
-    { stage: "waiting_for_board", label: "USB", icon: Usb },
-    { stage: "needs_flash", label: "Firmware", icon: Cpu },
-    { stage: "wifi", label: "Wi-Fi", icon: Wifi },
-    { stage: "verifying_connection", label: "Connect", icon: RadioTower },
+    { stage: "waiting_for_board", label: t("setup.step.usb"), icon: Usb },
+    { stage: "needs_flash", label: t("setup.step.firmware"), icon: Cpu },
+    { stage: "wifi", label: t("setup.step.wifi"), icon: Wifi },
+    { stage: "verifying_connection", label: t("setup.step.connect"), icon: RadioTower },
   ];
 
   return (

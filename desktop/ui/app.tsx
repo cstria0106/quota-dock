@@ -69,7 +69,7 @@ export function App() {
 
   if (!snapshot) {
     return (
-      <main className="grid min-h-screen place-items-center bg-background">
+      <main className="grid h-full place-items-center bg-background">
         <Spinner />
       </main>
     );
