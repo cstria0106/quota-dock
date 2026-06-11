@@ -3,7 +3,7 @@
 This repository is organized as a multi-target project:
 
 - `firmware/` contains the Rust-first ESP-IDF firmware for an ESP32-S3 board with an SH8601 AMOLED display.
-- `desktop/` contains the Tauri v2 desktop app and its Vanilla TypeScript UI.
+- `desktop/` contains the Tauri v2 desktop app and its React + TypeScript UI (Vite, Tailwind CSS v4, shadcn/ui).
 
 # Tooling
 
