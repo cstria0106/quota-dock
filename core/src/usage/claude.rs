@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, RETRY_AFTER, USER_AGENT};
@@ -307,7 +310,10 @@ fn claude_code_version_output() -> Option<String> {
         return Some(version);
     }
 
-    let output = Command::new("claude").arg("--version").output().ok()?;
+    let mut command = Command::new("claude");
+    command.arg("--version");
+    hide_command_window(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -318,6 +324,15 @@ fn claude_code_version_output() -> Option<String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     (!stderr.is_empty()).then_some(stderr)
 }
+
+#[cfg(windows)]
+fn hide_command_window(command: &mut Command) {
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_command_window(_command: &mut Command) {}
 
 fn normalized_claude_code_version(raw: &str) -> Option<String> {
     raw.split_whitespace()
