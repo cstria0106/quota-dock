@@ -11,12 +11,10 @@ export function ActivityLog({ lines }: { lines: string[] }) {
   const visibleLines = lines.slice(-80);
 
   return (
-    <details className="rounded-lg border bg-card">
-      <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-        {t("activity.title")}
-      </summary>
+    <div className="rounded-lg border bg-card">
+      <div className="px-4 py-3 text-sm font-medium">{t("activity.title")}</div>
       <Separator />
-      <ScrollArea className="h-40">
+      <ScrollArea className="h-[28rem]">
         <div className="grid gap-1 px-4 py-3">
           {visibleLines.map((line, index) => (
             <code
@@ -28,6 +26,6 @@ export function ActivityLog({ lines }: { lines: string[] }) {
           ))}
         </div>
       </ScrollArea>
-    </details>
+    </div>
   );
 }

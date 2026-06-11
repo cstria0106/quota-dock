@@ -7,16 +7,16 @@ import {
   Repeat,
   ScrollText,
   SlidersHorizontal,
-  Sun,
   Trash2,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
 
+import { invoke } from "@tauri-apps/api/core";
+
 import { ActivityLog } from "@/components/activity-log";
 import { EmptyState, ErrorNotice } from "@/components/feedback";
-import { SettingsMenu } from "@/components/settings-menu";
 import { StatusPill } from "@/components/status-pill";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,7 +46,12 @@ import {
   intervalLabel,
   relativeTime,
 } from "@/lib/format";
-import type { TFunction } from "@/lib/i18n";
+import {
+  LOCALES,
+  LOCALE_LABELS,
+  type Locale,
+  type TFunction,
+} from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import type {
@@ -222,7 +227,7 @@ function Sidebar({
       : connState === "ok"
         ? t("dock.status.connected")
         : t("dock.status.waiting");
-  const synced = relativeTime(locale, dock.usageSnapshot?.updated_at);
+  const synced = relativeTime(locale, dock.usageSnapshot?.updated_at_unix);
   const subline = advanced
     ? dock.status?.ip || dock.deviceUrl || t("common.dash")
     : synced
@@ -290,19 +295,6 @@ function Sidebar({
             <Wrench />
             {t("dock.setup")}
           </Button>
-          <SettingsMenu
-            trigger={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                title={t("app.settings")}
-                className="text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-              >
-                <SlidersHorizontal className="rotate-90" />
-              </Button>
-            }
-          />
         </div>
       </div>
     </aside>
@@ -449,7 +441,45 @@ function DeviceSection({
         onRunCommand={onRunCommand}
         t={t}
       />
+      <SettingsPanel t={t} />
     </div>
+  );
+}
+
+function SettingsPanel({ t }: { t: TFunction }) {
+  const { advanced, setAdvanced, locale, setLocale } = useSettings();
+
+  return (
+    <Card className="rounded-xl lg:col-span-2">
+      <CardHeader className="border-b">
+        <CardTitle>{t("settings.title")}</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+          <Label>{t("app.language")}</Label>
+          <Select
+            value={locale}
+            onValueChange={(value) => setLocale(value as Locale)}
+          >
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {LOCALES.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {LOCALE_LABELS[value]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Separator />
+        <label className="flex items-center justify-between gap-3">
+          <span className="text-sm font-medium">{t("app.advanced")}</span>
+          <Switch checked={advanced} onCheckedChange={setAdvanced} />
+        </label>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -531,58 +561,113 @@ function ImagesPanel({
           <EmptyState label={t("dock.images.empty")} />
         ) : (
           <div className="grid gap-3">
-            {images.map((image, index) => {
-              const detail = image.path
-                ? advanced
-                  ? image.path
-                  : image.label
-                : t("dock.images.none");
-              return (
-                <React.Fragment key={image.id}>
-                  {index > 0 ? <Separator /> : null}
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate font-medium">{image.label}</div>
-                      <div className="truncate text-sm text-muted-foreground">
-                        {detail}
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      disabled={image.validating}
-                      title={t("dock.images.choose")}
-                      onClick={() => {
-                        void onRunCommand("choose_provider_image", {
-                          providerId: image.id,
-                        });
-                      }}
-                    >
-                      <ImagePlus />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      disabled={!image.path}
-                      title={t("dock.images.clear")}
-                      onClick={() => {
-                        void onRunCommand("clear_provider_image", {
-                          providerId: image.id,
-                        });
-                      }}
-                    >
-                      <Trash2 />
-                    </Button>
-                  </div>
-                </React.Fragment>
-              );
-            })}
+            {images.map((image, index) => (
+              <React.Fragment key={image.id}>
+                {index > 0 ? <Separator /> : null}
+                <ImageRow
+                  advanced={advanced}
+                  image={image}
+                  onRunCommand={onRunCommand}
+                  t={t}
+                />
+              </React.Fragment>
+            ))}
           </div>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function ImageRow({
+  advanced,
+  image,
+  onRunCommand,
+  t,
+}: {
+  advanced: boolean;
+  image: ImageOptionSnapshot;
+  onRunCommand: RunCommand;
+  t: TFunction;
+}) {
+  const [preview, setPreview] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!image.path || image.validating) {
+      setPreview(null);
+      return;
+    }
+    void invoke<string | null>("provider_image_preview", {
+      providerId: image.id,
+    })
+      .then((value) => {
+        if (!cancelled) {
+          setPreview(value ?? null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPreview(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [image.id, image.path, image.validating]);
+
+  const detail = image.path
+    ? advanced
+      ? image.path
+      : image.label
+    : t("dock.images.none");
+
+  return (
+    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2">
+      <span className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted">
+        {preview ? (
+          <img
+            alt={image.label}
+            src={preview}
+            className="size-full object-contain"
+          />
+        ) : (
+          <ImagePlus className="size-4 text-muted-foreground" />
+        )}
+      </span>
+      <div className="min-w-0">
+        <div className="truncate font-medium">{image.label}</div>
+        <div className="truncate text-sm text-muted-foreground">{detail}</div>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        disabled={image.validating}
+        title={t("dock.images.choose")}
+        onClick={() => {
+          void onRunCommand("choose_provider_image", {
+            providerId: image.id,
+          });
+        }}
+      >
+        <ImagePlus />
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        disabled={!image.path}
+        title={t("dock.images.clear")}
+        onClick={() => {
+          void onRunCommand("clear_provider_image", {
+            providerId: image.id,
+          });
+        }}
+      >
+        <Trash2 />
+      </Button>
+    </div>
   );
 }
 
@@ -630,17 +715,6 @@ function DevicePanel({
           />
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={Boolean(dock.commandRunning)}
-            onClick={() =>
-              void onRunCommand("set_brightness", { value: brightnessDraft })
-            }
-          >
-            <Sun />
-            {t("dock.device.apply")}
-          </Button>
           <Button
             type="button"
             variant="outline"

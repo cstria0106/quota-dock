@@ -18,7 +18,7 @@ export function usageStatusLabel(t: TFunction, status: string): string {
   return t(`status.${normalizeStatus(status)}` as Parameters<TFunction>[0]);
 }
 
-export const INTERVAL_PRESETS = [60, 300, 900, 1800, 3600] as const;
+export const INTERVAL_PRESETS = [30, 60, 300, 900, 1800, 3600] as const;
 
 export function intervalLabel(t: TFunction, secs: number): string {
   if ((INTERVAL_PRESETS as readonly number[]).includes(secs)) {
@@ -34,15 +34,17 @@ const RELATIVE_THRESHOLDS: Array<[limitSecs: number, unitSecs: number, unit: Int
   [Number.POSITIVE_INFINITY, 86400, "day"],
 ];
 
-// Renders an ISO/parseable timestamp as "3 minutes ago" in the active locale.
+// Renders a parseable timestamp (ISO string or unix epoch seconds) as
+// "3 minutes ago" in the active locale.
 export function relativeTime(
   locale: string,
-  timestamp?: string | null,
+  timestamp?: string | number | null,
 ): string | null {
-  if (!timestamp) {
+  if (timestamp === undefined || timestamp === null) {
     return null;
   }
-  const parsed = Date.parse(timestamp);
+  const parsed =
+    typeof timestamp === "number" ? timestamp * 1000 : Date.parse(timestamp);
   if (Number.isNaN(parsed)) {
     return null;
   }

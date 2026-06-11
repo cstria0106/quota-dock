@@ -9,6 +9,7 @@ default = []
 custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
+base64 = "0.22.1"
 dirs = "6.0"
 quota-dock-core = { path = "../core", features = ["flash"] }
 rfd = "0.15"

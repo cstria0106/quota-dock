@@ -42,6 +42,7 @@ pub fn run() {
             set_provider_enabled,
             choose_provider_image,
             clear_provider_image,
+            provider_image_preview,
             set_brightness,
             ping,
             cycle_provider,
@@ -212,6 +213,19 @@ fn clear_provider_image(
         controller.clear_provider_image(&provider_id);
         Ok(())
     })
+}
+
+#[tauri::command]
+fn provider_image_preview(
+    provider_id: String,
+    state: State<'_, ControllerState>,
+) -> Result<Option<String>, String> {
+    let controller = state.controller.lock().expect("controller lock");
+    let provider_id = provider_id.to_ascii_lowercase();
+    let Some(path) = controller.settings.images.get(provider_id.as_str()) else {
+        return Ok(None);
+    };
+    image_data_url(path).map(Some)
 }
 
 #[tauri::command]
@@ -561,14 +575,15 @@ impl DesktopController {
                     self.validating_images.remove(&provider_id);
                     match result {
                         Ok(()) => {
+                            let stored = self.store_provider_image(&provider_id, &path);
                             self.settings
                                 .images
-                                .insert(provider_id.clone(), path.clone());
+                                .insert(provider_id.clone(), stored.clone());
                             self.pending_image_clears.remove(&provider_id);
                             self.send_images_next_sync = true;
                             self.sync_scheduler.request_send_now();
                             self.save_settings();
-                            self.push_log(format!("{provider_id} image: {}", path.display()));
+                            self.push_log(format!("{provider_id} image: {}", stored.display()));
                         }
                         Err(err) => {
                             self.push_log(format!("{provider_id} image failed: {err}"));
@@ -886,8 +901,40 @@ impl DesktopController {
         }
     }
 
+    fn images_dir(&self) -> PathBuf {
+        self.settings_path
+            .parent()
+            .map(|parent| parent.join("images"))
+            .unwrap_or_else(|| PathBuf::from("images"))
+    }
+
+    // Copies the user-selected image into the app's data directory so the
+    // provider image survives the original file being moved or deleted.
+    // Falls back to the original path if the copy fails.
+    fn store_provider_image(&mut self, provider_id: &str, src: &std::path::Path) -> PathBuf {
+        let provider_id = provider_id.to_ascii_lowercase();
+        let extension = src
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .unwrap_or_else(|| "png".to_string());
+        let dir = self.images_dir();
+        let dest = dir.join(format!("{provider_id}.{extension}"));
+        if let Err(err) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::copy(src, &dest).map(|_| ())) {
+            self.push_log(format!(
+                "{provider_id} image copy failed ({err}), using original path"
+            ));
+            return src.to_path_buf();
+        }
+        dest
+    }
+
     fn clear_provider_image(&mut self, provider_id: &str) {
-        self.settings.images.remove(provider_id);
+        if let Some(path) = self.settings.images.remove(provider_id) {
+            if path.starts_with(self.images_dir()) {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
         self.pending_image_clears.insert(provider_id.to_string());
         self.sync_scheduler.request_send_now();
         self.save_settings();
@@ -1254,6 +1301,25 @@ fn normalize_device_language(value: &str) -> Result<String, String> {
         "ko" | "ko-kr" => Ok("ko".to_string()),
         _ => Err(format!("지원하지 않는 보드 언어입니다: {value}")),
     }
+}
+
+fn image_mime(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        _ => "image/png",
+    }
+}
+
+fn image_data_url(path: &std::path::Path) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = std::fs::read(path).map_err(|err| format!("read {}: {err}", path.display()))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{};base64,{}", image_mime(path), encoded))
 }
 
 fn first_error_line(label: &str, message: &str) -> String {

@@ -18,6 +18,9 @@ export function App() {
   const [brightnessDraft, setBrightnessDraft] = React.useState(255);
   const wifiTouchedRef = React.useRef(false);
   const brightnessTouchedRef = React.useRef(false);
+  const brightnessTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const applySnapshot = React.useCallback((next: AppSnapshot) => {
     setSnapshot(next);
@@ -73,6 +76,29 @@ export function App() {
     }
   }, [snapshot?.setup.stage]);
 
+  const handleBrightnessDraft = React.useCallback(
+    (value: number) => {
+      brightnessTouchedRef.current = true;
+      setBrightnessDraft(value);
+      if (brightnessTimerRef.current) {
+        clearTimeout(brightnessTimerRef.current);
+      }
+      brightnessTimerRef.current = setTimeout(() => {
+        void runCommand("set_brightness", { value });
+      }, 400);
+    },
+    [runCommand],
+  );
+
+  React.useEffect(
+    () => () => {
+      if (brightnessTimerRef.current) {
+        clearTimeout(brightnessTimerRef.current);
+      }
+    },
+    [],
+  );
+
   if (!snapshot) {
     return (
       <main className="grid h-full place-items-center bg-background">
@@ -86,10 +112,7 @@ export function App() {
       <DockView
         brightnessDraft={brightnessDraft}
         commandError={commandError}
-        onBrightnessDraft={(value) => {
-          brightnessTouchedRef.current = true;
-          setBrightnessDraft(value);
-        }}
+        onBrightnessDraft={handleBrightnessDraft}
         onPrepareSetup={() => {
           wifiTouchedRef.current = false;
           setWifiPassword("");
