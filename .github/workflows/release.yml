@@ -161,6 +161,10 @@ jobs:
           name: firmware-flash
           path: firmware/target/flash
 
+      - name: Normalize firmware artifact timestamps
+        shell: bash
+        run: touch firmware/target/flash/firmware-metadata.env
+
       - name: Test desktop
         if: matrix.xwin == false
         working-directory: desktop
