@@ -1,39 +1,39 @@
 # QuotaDock
 
-책상 위 작은 AMOLED 화면에 Claude와 Codex의 남은 사용량을 띄워주는 데스크 가젯입니다.
+[한국어](README.ko.md)
 
----
+A small desk gadget that shows your remaining Claude and Codex usage on a compact AMOLED display.
 
-## 준비물
+![QuotaDock display](docs/assets/quotadock-display.png)
 
-- ESP32-S3 보드 (SH8601 AMOLED 디스플레이 탑재)
-- USB-C 케이블
-- 2.4GHz Wi-Fi 네트워크
+## Requirements
 
-## 설치
+- [ESP32-S3-Touch-AMOLED-1.64](https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.64) board
+- USB-C cable
+- 2.4 GHz Wi-Fi network
 
-1. [Releases](../../releases) 페이지에서 운영체제에 맞는 최신 QuotaDock 데스크톱 앱을 내려받습니다.
-2. 보드를 USB-C로 컴퓨터에 연결합니다.
-3. 내려받은 앱을 실행합니다.
+## Installation
 
-## 사용법
+1. Download the latest QuotaDock desktop app for your operating system from the [Releases](../../releases) page.
+2. Connect the board to your computer with a USB-C cable.
+3. Run the downloaded app.
 
-1. 앱을 열고 ESP32-S3를 연결하면 이를 자동으로 찾습니다.
-2. 처음이라면 안내에 따라 펌웨어를 플래시하고 Wi-Fi 정보를 입력해 기기를 설정합니다.
-3. 설정이 끝나면 Claude·Codex 사용량이 기기 화면에 표시되고, 앱이 주기적으로 자동 동기화합니다.
+## Usage
 
-추가로 지원하는 기능:
+1. Open the app and connect the ESP32-S3. The app will detect it automatically.
+2. If this is your first setup, follow the guide to flash the firmware and enter your Wi-Fi information.
+3. Once setup is complete, Claude and Codex usage appears on the device screen, and the app syncs it periodically.
 
-- 프로바이더별 아이콘 이미지 지정
+Additional feature:
 
----
+- Custom provider icon images
 
-## 참고
+## Credits
 
-- 사용량 조회 로직은 [CodexBar](https://github.com/steipete/codexbar)를 참고했습니다.
+- The usage lookup logic is based on [CodexBar](https://github.com/steipete/codexbar).
 
-## 라이선스
+## License
 
-이 프로젝트는 [MIT 라이선스](LICENSE)로 배포됩니다.
+This project is distributed under the [MIT License](LICENSE).
 
-갈무리(Galmuri) 폰트는 SIL Open Font License 1.1에 따라 별도로 라이선스되며, 저작권은 폰트 제작자에게 있습니다. 자세한 내용은 [갈무리 폰트 저장소](https://github.com/quiple/galmuri)를 참고하세요.
+The Galmuri font is licensed separately under the SIL Open Font License 1.1. Copyright belongs to the font authors. See the [Galmuri font repository](https://github.com/quiple/galmuri) for details.
