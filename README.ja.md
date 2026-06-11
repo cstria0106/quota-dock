@@ -4,8 +4,10 @@
 
 Claude と Codex の残り使用量を、コンパクトな AMOLED ディスプレイに表示する小さなデスクガジェットです。
 
-![QuotaDock display](docs/assets/quotadock-display.png)
-![QuotaDock 韓国語表示](docs/assets/quotadock-display-ko.png)
+<p>
+  <img src="docs/assets/quotadock-display.png" alt="QuotaDock display" width="49%">
+  <img src="docs/assets/quotadock-display-ko.png" alt="QuotaDock 韓国語表示" width="49%">
+</p>
 
 ## 必要なもの
 

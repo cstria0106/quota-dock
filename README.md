@@ -4,8 +4,10 @@
 
 A small desk gadget that shows your remaining Claude and Codex usage on a compact AMOLED display.
 
-![QuotaDock display](docs/assets/quotadock-display.png)
-![QuotaDock Korean display](docs/assets/quotadock-display-ko.png)
+<p>
+  <img src="docs/assets/quotadock-display.png" alt="QuotaDock display" width="49%">
+  <img src="docs/assets/quotadock-display-ko.png" alt="QuotaDock Korean display" width="49%">
+</p>
 
 ## Requirements
 
