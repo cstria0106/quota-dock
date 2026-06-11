@@ -441,12 +441,20 @@ function DeviceSection({
         onRunCommand={onRunCommand}
         t={t}
       />
-      <SettingsPanel t={t} />
+      <SettingsPanel dock={dock} onRunCommand={onRunCommand} t={t} />
     </div>
   );
 }
 
-function SettingsPanel({ t }: { t: TFunction }) {
+function SettingsPanel({
+  dock,
+  onRunCommand,
+  t,
+}: {
+  dock: DockSnapshot;
+  onRunCommand: RunCommand;
+  t: TFunction;
+}) {
   const { advanced, setAdvanced, locale, setLocale } = useSettings();
 
   return (
@@ -477,6 +485,26 @@ function SettingsPanel({ t }: { t: TFunction }) {
         <label className="flex items-center justify-between gap-3">
           <span className="text-sm font-medium">{t("app.advanced")}</span>
           <Switch checked={advanced} onCheckedChange={setAdvanced} />
+        </label>
+        <Separator />
+        <label className="flex items-center justify-between gap-3">
+          <span className="text-sm font-medium">{t("app.closeToTray")}</span>
+          <Switch
+            checked={dock.closeToTray}
+            onCheckedChange={(enabled) =>
+              void onRunCommand("set_close_to_tray", { enabled })
+            }
+          />
+        </label>
+        <Separator />
+        <label className="flex items-center justify-between gap-3">
+          <span className="text-sm font-medium">{t("app.launchAtStartup")}</span>
+          <Switch
+            checked={dock.launchAtStartup}
+            onCheckedChange={(enabled) =>
+              void onRunCommand("set_launch_at_startup", { enabled })
+            }
+          />
         </label>
       </CardContent>
     </Card>

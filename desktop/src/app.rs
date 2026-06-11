@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 
 use quota_dock_core::{DeviceCommand, StatusResponse, UsageSnapshot};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use crate::firmware::{bundled_firmware, BundledFirmware};
 use crate::settings::{load_settings, save_to_path, DesktopSettings};
@@ -24,9 +27,15 @@ const HTTP_VERIFY_WINDOW: Duration = Duration::from_secs(20);
 const HTTP_VERIFY_INTERVAL: Duration = Duration::from_secs(2);
 const UI_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const PROVIDER_IMAGES: &[(&str, &str)] = &[("codex", "Codex"), ("claude", "Claude")];
+const TRAY_SHOW_ID: &str = "show";
+const TRAY_QUIT_ID: &str = "quit";
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![]),
+        ))
         .manage(ControllerState::new())
         .invoke_handler(tauri::generate_handler![
             get_app_snapshot,
@@ -44,10 +53,15 @@ pub fn run() {
             clear_provider_image,
             provider_image_preview,
             set_brightness,
+            set_close_to_tray,
+            set_launch_at_startup,
             ping,
             cycle_provider,
         ])
         .setup(|app| {
+            setup_tray(app.handle())?;
+            setup_close_to_tray(app.handle());
+            sync_autostart(app.handle());
             spawn_controller_loop(app.handle().clone());
             Ok(())
         })
@@ -243,6 +257,33 @@ fn set_brightness(
 }
 
 #[tauri::command]
+fn set_close_to_tray(
+    enabled: bool,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.settings.close_to_tray = enabled;
+        controller.save_settings();
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn set_launch_at_startup(
+    enabled: bool,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    set_autostart(&app, enabled)?;
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.settings.launch_at_startup = enabled;
+        controller.save_settings();
+        Ok(())
+    })
+}
+
+#[tauri::command]
 fn ping(state: State<'_, ControllerState>, app: AppHandle) -> Result<AppSnapshot, String> {
     mutate_and_snapshot(&state, &app, |controller| {
         controller.send_command("ping", DeviceCommand::Ping);
@@ -284,6 +325,90 @@ fn snapshot(state: &State<'_, ControllerState>) -> AppSnapshot {
 
 fn emit_snapshot(app: &AppHandle, snapshot: &AppSnapshot) {
     let _ = app.emit("app-snapshot", snapshot);
+}
+
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, TRAY_SHOW_ID, "QuotaDock 열기", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "종료", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let icon = app.default_window_icon().cloned();
+    let app_for_click = app.clone();
+
+    let mut tray = TrayIconBuilder::new()
+        .menu(&menu)
+        .tooltip("QuotaDock")
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TRAY_SHOW_ID => show_main_window(app),
+            TRAY_QUIT_ID => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(move |_tray, event| match event {
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            }
+            | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } => show_main_window(&app_for_click),
+            _ => {}
+        });
+
+    if let Some(icon) = icon {
+        tray = tray.icon(icon);
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+fn setup_close_to_tray(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let app = app.clone();
+        window.on_window_event(move |event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let state = app.state::<ControllerState>();
+                let controller = state.controller.lock().expect("controller lock");
+                if controller.settings.close_to_tray {
+                    api.prevent_close();
+                    drop(controller);
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+                }
+            }
+        });
+    }
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn sync_autostart(app: &AppHandle) {
+    let state = app.state::<ControllerState>();
+    let mut controller = state.controller.lock().expect("controller lock");
+    let enabled = controller.settings.launch_at_startup;
+    if let Err(err) = set_autostart(app, enabled) {
+        controller.push_log(format!("autostart sync failed: {err}"));
+    }
+}
+
+fn set_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager
+            .enable()
+            .map_err(|err| format!("enable startup launch: {err}"))
+    } else {
+        manager
+            .disable()
+            .map_err(|err| format!("disable startup launch: {err}"))
+    }
 }
 
 fn spawn_controller_loop(app: AppHandle) {
@@ -433,6 +558,8 @@ impl DesktopController {
             usage_snapshot: self.latest_snapshot.clone(),
             image_options: self.image_options(),
             brightness: self.settings.brightness,
+            close_to_tray: self.settings.close_to_tray,
+            launch_at_startup: self.settings.launch_at_startup,
             command_running: self.command_running.map(str::to_string),
             save_error: self.save_error.clone(),
         }
@@ -1263,6 +1390,8 @@ struct DockSnapshot {
     usage_snapshot: Option<UsageSnapshot>,
     image_options: Vec<ImageOptionSnapshot>,
     brightness: u8,
+    close_to_tray: bool,
+    launch_at_startup: bool,
     command_running: Option<String>,
     save_error: Option<String>,
 }

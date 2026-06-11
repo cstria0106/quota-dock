@@ -23,6 +23,10 @@ pub struct DesktopSettings {
     pub disabled_provider_ids: BTreeSet<String>,
     #[serde(default)]
     pub images: BTreeMap<String, PathBuf>,
+    #[serde(default)]
+    pub close_to_tray: bool,
+    #[serde(default)]
+    pub launch_at_startup: bool,
 }
 
 impl Default for DesktopSettings {
@@ -35,6 +39,8 @@ impl Default for DesktopSettings {
             brightness: default_brightness(),
             disabled_provider_ids: BTreeSet::new(),
             images: BTreeMap::new(),
+            close_to_tray: false,
+            launch_at_startup: false,
         }
     }
 }

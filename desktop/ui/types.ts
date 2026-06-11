@@ -27,6 +27,8 @@ export type CommandName =
   | "choose_provider_image"
   | "clear_provider_image"
   | "set_brightness"
+  | "set_close_to_tray"
+  | "set_launch_at_startup"
   | "ping"
   | "cycle_provider";
 
@@ -120,6 +122,8 @@ export interface DockSnapshot {
   usageSnapshot?: UsageSnapshot | null;
   imageOptions: ImageOptionSnapshot[];
   brightness: number;
+  closeToTray: boolean;
+  launchAtStartup: boolean;
   commandRunning?: string | null;
   saveError?: string | null;
 }

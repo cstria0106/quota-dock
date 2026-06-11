@@ -13,6 +13,8 @@ const ko: Catalog = {
   "app.title": "QuotaDock",
   "app.subtitle.idle": "기기를 기다리는 중",
   "app.advanced": "개발자 모드",
+  "app.closeToTray": "닫기 버튼은 트레이로",
+  "app.launchAtStartup": "PC 시작 시 자동 실행",
   "app.language": "언어",
   "app.settings": "설정",
 
@@ -104,6 +106,8 @@ const en: Catalog = {
   "app.title": "QuotaDock",
   "app.subtitle.idle": "Waiting for device",
   "app.advanced": "Developer mode",
+  "app.closeToTray": "Close button hides to tray",
+  "app.launchAtStartup": "Launch at computer startup",
   "app.language": "Language",
   "app.settings": "Settings",
 
