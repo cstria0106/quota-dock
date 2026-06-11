@@ -1,42 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use quota_dock_core::ProviderSelection;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SYNC_INTERVAL_SECS: u64 = 60;
 pub const MIN_SYNC_INTERVAL_SECS: u64 = 5;
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ProviderChoice {
-    #[default]
-    All,
-    Codex,
-    Claude,
-}
-
-impl ProviderChoice {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Codex => "Codex",
-            Self::Claude => "Claude",
-        }
-    }
-
-    pub fn options() -> [Self; 3] {
-        [Self::All, Self::Codex, Self::Claude]
-    }
-
-    pub fn selection(self) -> ProviderSelection {
-        match self {
-            Self::All => ProviderSelection::All,
-            Self::Codex => ProviderSelection::Codex,
-            Self::Claude => ProviderSelection::Claude,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DesktopSettings {
@@ -51,7 +20,7 @@ pub struct DesktopSettings {
     #[serde(default = "default_brightness")]
     pub brightness: u8,
     #[serde(default)]
-    pub provider: ProviderChoice,
+    pub disabled_provider_ids: BTreeSet<String>,
     #[serde(default)]
     pub images: BTreeMap<String, PathBuf>,
 }
@@ -64,7 +33,7 @@ impl Default for DesktopSettings {
             device_url: String::new(),
             sync_interval_secs: DEFAULT_SYNC_INTERVAL_SECS,
             brightness: default_brightness(),
-            provider: ProviderChoice::All,
+            disabled_provider_ids: BTreeSet::new(),
             images: BTreeMap::new(),
         }
     }
@@ -73,6 +42,11 @@ impl Default for DesktopSettings {
 impl DesktopSettings {
     pub fn normalized(mut self) -> Self {
         self.sync_interval_secs = self.sync_interval_secs.max(MIN_SYNC_INTERVAL_SECS);
+        self.disabled_provider_ids = self
+            .disabled_provider_ids
+            .into_iter()
+            .map(|provider_id| provider_id.to_ascii_lowercase())
+            .collect();
         self
     }
 }

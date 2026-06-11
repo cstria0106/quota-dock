@@ -184,6 +184,7 @@ impl QuotaDockApp {
 
     fn handle_sync_report(&mut self, report: SyncReport) {
         self.sync_running = false;
+        self.available_providers = report.available_providers;
         self.latest_snapshot = Some(report.snapshot);
         self.last_sync_ok = Some(report.ok);
         self.last_sync_message = report.message.clone();

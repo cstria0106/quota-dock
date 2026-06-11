@@ -47,7 +47,7 @@ pub enum Task {
     },
     SyncUsage {
         device_url: String,
-        selection: ProviderSelection,
+        disabled_provider_ids: BTreeSet<String>,
         image_paths: BTreeMap<String, PathBuf>,
         force_images: bool,
         clear_image_ids: Vec<String>,
@@ -81,11 +81,20 @@ pub enum TaskResult {
 #[derive(Clone, Debug)]
 pub struct SyncReport {
     pub snapshot: UsageSnapshot,
+    pub available_providers: Vec<AvailableProvider>,
     pub ok: bool,
     pub sent_images: bool,
     pub cleared_images: Vec<String>,
     pub provider_count: usize,
     pub message: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AvailableProvider {
+    pub id: String,
+    pub label: String,
+    pub source: String,
+    pub plan: Option<String>,
 }
 
 pub struct Worker {
@@ -157,13 +166,13 @@ fn run_task(task: Task) -> TaskResult {
         },
         Task::SyncUsage {
             device_url,
-            selection,
+            disabled_provider_ids,
             image_paths,
             force_images,
             clear_image_ids,
         } => TaskResult::SyncUsage(sync_usage(
             &device_url,
-            selection,
+            &disabled_provider_ids,
             &image_paths,
             force_images,
             &clear_image_ids,
@@ -181,24 +190,35 @@ fn run_task(task: Task) -> TaskResult {
 
 fn sync_usage(
     device_url: &str,
-    selection: ProviderSelection,
+    disabled_provider_ids: &BTreeSet<String>,
     image_paths: &BTreeMap<String, PathBuf>,
     force_images: bool,
     clear_image_ids: &[String],
 ) -> SyncReport {
-    let mut snapshot = collect_snapshot(selection);
+    let collected_snapshot = collect_snapshot(ProviderSelection::All);
+    let available_providers = collected_snapshot
+        .providers
+        .iter()
+        .filter(|provider| is_available_provider(provider))
+        .map(|provider| AvailableProvider {
+            id: provider.id.clone(),
+            label: provider.label.clone(),
+            source: provider.source.clone(),
+            plan: provider.plan.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut snapshot = UsageSnapshot {
+        providers: collected_snapshot
+            .providers
+            .into_iter()
+            .filter(is_available_provider)
+            .filter(|provider| !disabled_provider_ids.contains(&provider.id.to_ascii_lowercase()))
+            .collect(),
+        updated_at: collected_snapshot.updated_at,
+        updated_at_unix: collected_snapshot.updated_at_unix,
+    };
     let mut failures = Vec::new();
     let provider_count = snapshot.providers.len();
-    if provider_count == 0 {
-        return SyncReport {
-            snapshot,
-            ok: false,
-            sent_images: force_images,
-            cleared_images: clear_image_ids.to_vec(),
-            provider_count,
-            message: "no usage providers were collected".to_string(),
-        };
-    }
 
     let provider_images = match local_provider_images(&snapshot, image_paths) {
         Ok(provider_images) => provider_images,
@@ -250,13 +270,19 @@ fn sync_usage(
 
     let ok = failures.is_empty();
     let message = if ok {
-        sync_success_message(provider_count, image_update_count, clear_image_ids.len())
+        sync_success_message(
+            provider_count,
+            available_providers.len(),
+            image_update_count,
+            clear_image_ids.len(),
+        )
     } else {
         failures.join("; ")
     };
 
     SyncReport {
         snapshot,
+        available_providers,
         ok,
         sent_images: force_images || image_update_count > 0 || !clear_image_ids.is_empty(),
         cleared_images: if ok {
@@ -267,6 +293,14 @@ fn sync_usage(
         provider_count,
         message,
     }
+}
+
+fn is_available_provider(provider: &quota_dock_core::UsageProvider) -> bool {
+    !provider.source.eq_ignore_ascii_case("unavailable")
+        && provider
+            .windows
+            .iter()
+            .any(|window| !window.status.eq_ignore_ascii_case("error"))
 }
 
 #[derive(Clone)]
@@ -356,10 +390,13 @@ fn image_payload_count(payload: &SyncPayload) -> usize {
 
 fn sync_success_message(
     provider_count: usize,
+    available_provider_count: usize,
     image_update_count: usize,
     image_clear_count: usize,
 ) -> String {
-    let mut parts = vec![format!("synced {provider_count} provider(s)")];
+    let mut parts = vec![format!(
+        "synced {provider_count}/{available_provider_count} provider(s)"
+    )];
     if image_update_count > 0 {
         parts.push(format!("updated {image_update_count} image(s)"));
     }

@@ -1,8 +1,6 @@
 use eframe::egui;
 use quota_dock_core::DeviceCommand;
 
-use crate::settings::ProviderChoice;
-
 use super::{QuotaDockApp, PROVIDER_IMAGES};
 
 impl QuotaDockApp {
@@ -20,24 +18,6 @@ impl QuotaDockApp {
             if interval.changed() {
                 self.save_settings();
             }
-            egui::ComboBox::from_label("Provider")
-                .selected_text(self.settings.provider.label())
-                .show_ui(ui, |ui| {
-                    for provider in ProviderChoice::options() {
-                        if ui
-                            .selectable_value(
-                                &mut self.settings.provider,
-                                provider,
-                                provider.label(),
-                            )
-                            .changed()
-                        {
-                            self.send_images_next_sync = true;
-                            self.sync_scheduler.request_now();
-                            self.save_settings();
-                        }
-                    }
-                });
             if ui
                 .add_enabled(
                     self.can_use_http() && !self.sync_running,
@@ -59,11 +39,35 @@ impl QuotaDockApp {
         }
 
         ui.add_space(8.0);
+        self.provider_toggles(ui);
+        ui.separator();
         self.usage_snapshot(ui);
         ui.separator();
         self.image_manager(ui);
         ui.separator();
         self.device_controls(ui);
+    }
+
+    fn provider_toggles(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Providers");
+        if self.available_providers.is_empty() {
+            ui.label("No available providers yet.");
+            return;
+        }
+
+        for provider in self.available_providers.clone() {
+            let provider_id = provider.id.to_ascii_lowercase();
+            let mut enabled = !self.settings.disabled_provider_ids.contains(&provider_id);
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut enabled, provider.label.as_str()).changed() {
+                    self.set_provider_enabled(provider.id.as_str(), enabled);
+                }
+                ui.label(provider.source.as_str());
+                if let Some(plan) = provider.plan.as_deref() {
+                    ui.label(plan);
+                }
+            });
+        }
     }
 
     fn usage_snapshot(&self, ui: &mut egui::Ui) {
@@ -94,19 +98,19 @@ impl QuotaDockApp {
 
     fn image_manager(&mut self, ui: &mut egui::Ui) {
         ui.heading("Images");
-        for (provider_id, label) in PROVIDER_IMAGES {
+        for (provider_id, label) in self.available_provider_image_options() {
             ui.horizontal(|ui| {
-                ui.label(*label);
+                ui.label(label.as_str());
                 let path = self
                     .settings
                     .images
-                    .get(*provider_id)
+                    .get(provider_id.as_str())
                     .map(|path| path.display().to_string())
                     .unwrap_or_else(|| "-".to_string());
                 ui.monospace(path);
                 let choose_clicked = ui
                     .add_enabled(
-                        !self.validating_images.contains(*provider_id),
+                        !self.validating_images.contains(provider_id.as_str()),
                         egui::Button::new("Choose"),
                     )
                     .clicked();
@@ -115,20 +119,32 @@ impl QuotaDockApp {
                         .add_filter("Images", &["png", "jpg", "jpeg"])
                         .pick_file()
                     {
-                        self.validate_image((*provider_id).to_string(), path);
+                        self.validate_image(provider_id.clone(), path);
                     }
                 }
                 if ui
                     .add_enabled(
-                        self.settings.images.contains_key(*provider_id),
+                        self.settings.images.contains_key(provider_id.as_str()),
                         egui::Button::new("Clear"),
                     )
                     .clicked()
                 {
-                    self.clear_provider_image(provider_id);
+                    self.clear_provider_image(provider_id.as_str());
                 }
             });
         }
+    }
+
+    fn available_provider_image_options(&self) -> Vec<(String, String)> {
+        self.available_providers
+            .iter()
+            .filter_map(|provider| {
+                PROVIDER_IMAGES
+                    .iter()
+                    .find(|(provider_id, _)| provider.id.eq_ignore_ascii_case(provider_id))
+                    .map(|(_, label)| (provider.id.to_ascii_lowercase(), (*label).to_string()))
+            })
+            .collect()
     }
 
     fn device_controls(&mut self, ui: &mut egui::Ui) {

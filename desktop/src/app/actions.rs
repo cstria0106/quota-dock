@@ -93,6 +93,25 @@ impl QuotaDockApp {
         self.push_log(format!("{provider_id} image cleared"));
     }
 
+    pub(super) fn set_provider_enabled(&mut self, provider_id: &str, enabled: bool) {
+        let provider_id = provider_id.to_ascii_lowercase();
+        if enabled {
+            self.settings.disabled_provider_ids.remove(&provider_id);
+            self.send_images_next_sync = true;
+        } else {
+            self.settings
+                .disabled_provider_ids
+                .insert(provider_id.clone());
+            if let Some(snapshot) = &mut self.latest_snapshot {
+                snapshot
+                    .providers
+                    .retain(|provider| !provider.id.eq_ignore_ascii_case(provider_id.as_str()));
+            }
+        }
+        self.sync_scheduler.request_now();
+        self.save_settings();
+    }
+
     pub(super) fn poll_wifi_status_if_due(&mut self) {
         let Some(next) = self.serial_poll_next else {
             return;
@@ -121,7 +140,7 @@ impl QuotaDockApp {
         self.sync_scheduler.mark_started(Instant::now());
         if !self.queue(Task::SyncUsage {
             device_url: normalize_device_url(&self.settings.device_url),
-            selection: self.settings.provider.selection(),
+            disabled_provider_ids: self.settings.disabled_provider_ids.clone(),
             image_paths: self.settings.images.clone(),
             force_images,
             clear_image_ids: self.pending_image_clears.iter().cloned().collect(),

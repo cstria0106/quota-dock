@@ -13,7 +13,7 @@ use quota_dock_core::{StatusResponse, UsageSnapshot};
 use crate::firmware::{bundled_firmware, BundledFirmware};
 use crate::settings::{load_settings, DesktopSettings};
 use crate::sync::SyncScheduler;
-use crate::worker::Worker;
+use crate::worker::{AvailableProvider, Worker};
 
 pub(super) const SERIAL_BAUD: u32 = 115_200;
 pub(super) const WIFI_POLL_WINDOW: Duration = Duration::from_secs(60);
@@ -30,6 +30,7 @@ pub struct QuotaDockApp {
     wifi_password: String,
     status: Option<StatusResponse>,
     latest_snapshot: Option<UsageSnapshot>,
+    available_providers: Vec<AvailableProvider>,
     sync_scheduler: SyncScheduler,
     sync_enabled: bool,
     send_images_next_sync: bool,
@@ -64,6 +65,7 @@ impl QuotaDockApp {
             wifi_password: String::new(),
             status: None,
             latest_snapshot: None,
+            available_providers: Vec::new(),
             sync_scheduler: SyncScheduler::default(),
             sync_enabled: false,
             send_images_next_sync: true,
