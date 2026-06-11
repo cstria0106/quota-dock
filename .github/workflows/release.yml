@@ -59,7 +59,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: firmware-flash
-          path: firmware/target/flash/*.bin
+          path: |
+            firmware/target/flash/*.bin
+            firmware/target/flash/firmware-metadata.env
           if-no-files-found: error
 
       - name: Package firmware
@@ -141,6 +143,7 @@ jobs:
             lld \
             llvm \
             libayatana-appindicator3-dev \
+            libudev-dev \
             librsvg2-dev \
             libwebkit2gtk-4.1-dev \
             patchelf \
