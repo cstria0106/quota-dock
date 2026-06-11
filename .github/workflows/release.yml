@@ -131,12 +131,21 @@ jobs:
           corepack enable
           pnpm install --frozen-lockfile
 
-      - name: Install Windows cross build dependencies
+      - name: Install Ubuntu desktop dependencies
         if: matrix.xwin == true
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld llvm zip
+          sudo apt-get install -y \
+            clang \
+            lld \
+            llvm \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            pkg-config \
+            zip
           cargo install cargo-xwin --locked
 
       - name: Prepare firmware bundle inputs
