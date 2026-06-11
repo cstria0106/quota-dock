@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use super::{
     HTTP_TIMEOUT, UsageCollector, UsageProvider, UsageRegistry, UsageTheme, clamp_percent_i64,
-    codex_home, local, read_json, window,
+    codex_home, local, percent_from_value, read_json, window, window_kind_from_key,
+    window_label_from_key,
 };
 
 pub const PROVIDER_ID: &str = "CODEX";
@@ -78,13 +79,15 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
         return Err(format!("Codex usage API returned {}", response.status()));
     }
 
-    let usage = response
-        .json::<CodexUsageResponse>()
+    let usage_value = response
+        .json::<Value>()
         .map_err(|err| format!("decode Codex usage response: {err}"))?;
+    let usage = serde_json::from_value::<CodexUsageResponse>(usage_value.clone())
+        .map_err(|err| format!("decode Codex usage shape: {err}"))?;
     let rate_limit = usage
         .rate_limit
         .ok_or_else(|| "Codex usage response has no rate_limit".to_string())?;
-    let windows = codex_usage_windows(&rate_limit, &usage.additional_rate_limits);
+    let windows = codex_usage_windows(&rate_limit, &usage.additional_rate_limits, &usage_value);
     if windows.is_empty() {
         return Err("Codex usage response has no quota windows".to_string());
     }
@@ -105,6 +108,7 @@ fn fetch_codex_oauth_provider() -> Result<UsageProvider, String> {
 fn codex_usage_windows(
     rate_limit: &CodexRateLimit,
     additional_rate_limits: &[CodexAdditionalRateLimit],
+    usage: &Value,
 ) -> Vec<super::UsageWindow> {
     let mut windows = Vec::new();
     push_codex_window(&mut windows, "5h", "5h", rate_limit.primary_window.as_ref());
@@ -114,7 +118,9 @@ fn codex_usage_windows(
         "Week",
         rate_limit.secondary_window.as_ref(),
     );
+    push_unknown_codex_rate_limit_windows(&mut windows, "codex", rate_limit);
     push_additional_codex_windows(&mut windows, additional_rate_limits);
+    push_unknown_codex_top_level_windows(&mut windows, usage);
     windows
 }
 
@@ -144,6 +150,9 @@ fn push_additional_codex_windows(
     for entry in additional_rate_limits {
         if is_spark_limit(entry) {
             push_spark_codex_windows(windows, entry, &mut used_kinds);
+            if let Some(rate_limit) = &entry.rate_limit {
+                push_unknown_codex_rate_limit_windows(windows, "codex-spark", rate_limit);
+            }
             continue;
         }
 
@@ -169,6 +178,9 @@ fn push_additional_codex_windows(
             Some(format!("unix:{}", raw_window.reset_at)),
             "live",
         ));
+        if let Some(rate_limit) = &entry.rate_limit {
+            push_unknown_codex_rate_limit_windows(windows, kind.as_str(), rate_limit);
+        }
     }
 }
 
@@ -269,6 +281,78 @@ fn slug(value: &str) -> String {
     result.trim_matches('-').to_string()
 }
 
+fn push_unknown_codex_rate_limit_windows(
+    windows: &mut Vec<super::UsageWindow>,
+    prefix: &str,
+    rate_limit: &CodexRateLimit,
+) {
+    for (key, value) in &rate_limit.extra_windows {
+        let Ok(raw_window) = serde_json::from_value::<CodexWindow>(value.clone()) else {
+            continue;
+        };
+        let Some(kind) = window_kind_from_key(Some(prefix), key) else {
+            continue;
+        };
+        if windows.iter().any(|window| window.kind == kind) {
+            continue;
+        }
+        windows.push(window(
+            kind.as_str(),
+            window_label_from_key(key).as_str(),
+            clamp_percent_i64(raw_window.used_percent),
+            Some(format!("unix:{}", raw_window.reset_at)),
+            "live",
+        ));
+    }
+}
+
+fn push_unknown_codex_top_level_windows(windows: &mut Vec<super::UsageWindow>, usage: &Value) {
+    let Some(object) = usage.as_object() else {
+        return;
+    };
+    for (key, value) in object {
+        if matches!(
+            key.as_str(),
+            "plan_type" | "rate_limit" | "additional_rate_limits"
+        ) {
+            continue;
+        }
+        let Some(raw_window) = value.as_object() else {
+            continue;
+        };
+        let percent = raw_window
+            .get("used_percent")
+            .and_then(|value| value.as_i64().map(clamp_percent_i64))
+            .or_else(|| raw_window.get("utilization").and_then(percent_from_value));
+        let Some(percent) = percent else {
+            continue;
+        };
+        let Some(kind) = window_kind_from_key(Some("codex"), key) else {
+            continue;
+        };
+        if windows.iter().any(|window| window.kind == kind) {
+            continue;
+        }
+        let resets_at = raw_window
+            .get("reset_at")
+            .and_then(Value::as_i64)
+            .map(|reset_at| format!("unix:{reset_at}"))
+            .or_else(|| {
+                raw_window
+                    .get("resets_at")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            });
+        windows.push(window(
+            kind.as_str(),
+            window_label_from_key(key).as_str(),
+            percent,
+            resets_at,
+            "live",
+        ));
+    }
+}
+
 fn codex_log_roots() -> Vec<PathBuf> {
     let root = codex_home();
     vec![root.join("sessions"), root.join("archived_sessions")]
@@ -321,6 +405,8 @@ struct CodexRateLimit {
     primary_window: Option<CodexWindow>,
     #[serde(rename = "secondary_window")]
     secondary_window: Option<CodexWindow>,
+    #[serde(flatten)]
+    extra_windows: std::collections::BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -365,7 +451,7 @@ mod tests {
 
     #[test]
     fn maps_codex_additional_rate_limits() {
-        let usage = serde_json::from_value::<CodexUsageResponse>(serde_json::json!({
+        let usage_value = serde_json::json!({
             "plan_type": "pro",
             "rate_limit": {
                 "primary_window": {
@@ -377,6 +463,10 @@ mod tests {
                     "used_percent": 20,
                     "reset_at": 1_781_702_800,
                     "limit_window_seconds": 604_800
+                },
+                "monthly_window": {
+                    "used_percent": 25,
+                    "reset_at": 1_782_000_000
                 }
             },
             "additional_rate_limits": [
@@ -408,11 +498,12 @@ mod tests {
                     }
                 }
             ]
-        }))
-        .expect("decode usage");
+        });
+        let usage = serde_json::from_value::<CodexUsageResponse>(usage_value.clone())
+            .expect("decode usage");
 
         let rate_limit = usage.rate_limit.as_ref().expect("rate limit");
-        let windows = codex_usage_windows(rate_limit, &usage.additional_rate_limits);
+        let windows = codex_usage_windows(rate_limit, &usage.additional_rate_limits, &usage_value);
         let summaries = windows
             .iter()
             .map(|window| {
@@ -429,6 +520,7 @@ mod tests {
             vec![
                 ("5h", "5h", 10),
                 ("7d", "Week", 20),
+                ("codex-monthly-window", "Monthly", 25),
                 ("codex-spark", "Spark", 30),
                 ("codex-spark-weekly", "Spark Wk", 40),
                 ("codex-model-pool", "Model Pool", 50),

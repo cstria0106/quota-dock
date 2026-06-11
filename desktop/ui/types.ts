@@ -24,6 +24,12 @@ export type CommandName =
   | "set_sync_interval"
   | "set_device_language"
   | "set_provider_enabled"
+  | "set_provider_window_slot"
+  | "add_provider_window"
+  | "remove_provider_window"
+  | "set_provider_image_visible"
+  | "set_provider_accent_color"
+  | "reset_provider_accent_color"
   | "choose_provider_image"
   | "clear_provider_image"
   | "set_brightness"
@@ -75,6 +81,20 @@ export interface ProviderOptionSnapshot {
   label: string;
   source: string;
   plan?: string | null;
+  enabled: boolean;
+  usageWindowLimit: number;
+  showImage: boolean;
+  accentColor?: string | null;
+  imagePath?: string | null;
+  validatingImage: boolean;
+  windows: ProviderWindowOptionSnapshot[];
+}
+
+export interface ProviderWindowOptionSnapshot {
+  kind: string;
+  label: string;
+  used_percent: number;
+  status: string;
   enabled: boolean;
 }
 

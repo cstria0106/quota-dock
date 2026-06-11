@@ -12,7 +12,10 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use crate::firmware::{bundled_firmware, BundledFirmware};
-use crate::settings::{load_settings, save_to_path, DesktopSettings};
+use crate::settings::{
+    default_usage_window_limit, load_settings, save_to_path, DesktopSettings,
+    ProviderDisplaySettings,
+};
 use crate::sync::SyncScheduler;
 use crate::worker::{
     AvailableProvider, BoardDetectionReport, SyncReport, Task, TaskResult, Worker,
@@ -49,6 +52,12 @@ pub fn run() {
             set_sync_interval,
             set_device_language,
             set_provider_enabled,
+            set_provider_window_slot,
+            add_provider_window,
+            remove_provider_window,
+            set_provider_image_visible,
+            set_provider_accent_color,
+            reset_provider_accent_color,
             choose_provider_image,
             clear_provider_image,
             provider_image_preview,
@@ -194,6 +203,84 @@ fn set_provider_enabled(
 ) -> Result<AppSnapshot, String> {
     mutate_and_snapshot(&state, &app, |controller| {
         controller.set_provider_enabled(&provider_id, enabled);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn set_provider_window_slot(
+    provider_id: String,
+    slot: usize,
+    kind: String,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.set_provider_window_slot(&provider_id, slot, &kind);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn add_provider_window(
+    provider_id: String,
+    kind: String,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.add_provider_window(&provider_id, &kind);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn remove_provider_window(
+    provider_id: String,
+    slot: usize,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.remove_provider_window(&provider_id, slot);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn set_provider_image_visible(
+    provider_id: String,
+    visible: bool,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.set_provider_image_visible(&provider_id, visible);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn set_provider_accent_color(
+    provider_id: String,
+    color: String,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.set_provider_accent_color(&provider_id, &color);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn reset_provider_accent_color(
+    provider_id: String,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.reset_provider_accent_color(&provider_id);
         Ok(())
     })
 }
@@ -1090,6 +1177,82 @@ impl DesktopController {
         self.save_settings();
     }
 
+    fn provider_display_settings_mut(&mut self, provider_id: &str) -> &mut ProviderDisplaySettings {
+        self.settings
+            .provider_display
+            .entry(provider_id.to_ascii_lowercase())
+            .or_default()
+    }
+
+    fn set_provider_window_slot(&mut self, provider_id: &str, slot: usize, kind: &str) {
+        let provider_id = provider_id.to_ascii_lowercase();
+        let mut windows = self.provider_selected_windows(provider_id.as_str());
+        if slot >= windows.len() || !self.provider_has_window(provider_id.as_str(), kind) {
+            return;
+        }
+        if let Some(selected_slot) = windows.iter().position(|window_kind| window_kind == kind) {
+            windows.swap(slot, selected_slot);
+        } else {
+            windows[slot] = kind.to_string();
+        }
+        self.provider_display_settings_mut(provider_id.as_str())
+            .usage_windows = windows;
+        self.sync_scheduler.request_send_now();
+        self.save_settings();
+    }
+
+    fn add_provider_window(&mut self, provider_id: &str, kind: &str) {
+        let provider_id = provider_id.to_ascii_lowercase();
+        let mut windows = self.provider_selected_windows(provider_id.as_str());
+        if windows.len() >= default_usage_window_limit()
+            || windows.iter().any(|window_kind| window_kind == kind)
+            || !self.provider_has_window(provider_id.as_str(), kind)
+        {
+            return;
+        }
+        windows.push(kind.to_string());
+        self.provider_display_settings_mut(provider_id.as_str())
+            .usage_windows = windows;
+        self.sync_scheduler.request_send_now();
+        self.save_settings();
+    }
+
+    fn remove_provider_window(&mut self, provider_id: &str, slot: usize) {
+        let provider_id = provider_id.to_ascii_lowercase();
+        let mut windows = self.provider_selected_windows(provider_id.as_str());
+        if windows.len() <= 1 || slot >= windows.len() {
+            return;
+        }
+        windows.remove(slot);
+        self.provider_display_settings_mut(provider_id.as_str())
+            .usage_windows = windows;
+        self.sync_scheduler.request_send_now();
+        self.save_settings();
+    }
+
+    fn set_provider_image_visible(&mut self, provider_id: &str, visible: bool) {
+        self.provider_display_settings_mut(provider_id).show_image = visible;
+        self.send_images_next_sync = true;
+        self.sync_scheduler.request_send_now();
+        self.save_settings();
+    }
+
+    fn set_provider_accent_color(&mut self, provider_id: &str, color: &str) {
+        if !is_hex_color(color) {
+            return;
+        }
+        self.provider_display_settings_mut(provider_id).accent_color =
+            Some(color.trim().to_ascii_uppercase());
+        self.sync_scheduler.request_send_now();
+        self.save_settings();
+    }
+
+    fn reset_provider_accent_color(&mut self, provider_id: &str) {
+        self.provider_display_settings_mut(provider_id).accent_color = None;
+        self.sync_scheduler.request_send_now();
+        self.save_settings();
+    }
+
     fn sync_if_due(&mut self) {
         if self.setup.active || !self.sync_enabled || !self.can_use_http() {
             return;
@@ -1119,6 +1282,7 @@ impl DesktopController {
             device_url: normalize_device_url(&self.settings.device_url),
             language: self.device_language.clone(),
             disabled_provider_ids: self.settings.disabled_provider_ids.clone(),
+            provider_display: self.settings.provider_display.clone(),
             image_paths: self.settings.images.clone(),
             force_images,
             clear_image_ids: self.pending_image_clears.iter().cloned().collect(),
@@ -1168,15 +1332,114 @@ impl DesktopController {
             .iter()
             .map(|provider| {
                 let provider_id = provider.id.to_ascii_lowercase();
+                let display = self.settings.provider_display.get(provider_id.as_str());
+                let selected_windows = self.provider_selected_windows(provider_id.as_str());
+                let usage_window_limit = selected_windows.len();
+                let show_image = display.map(|settings| settings.show_image).unwrap_or(true);
+                let accent_color = display
+                    .and_then(|settings| settings.accent_color.clone())
+                    .or_else(|| provider.accent_color.clone())
+                    .or_else(|| {
+                        provider_accent_color(self.latest_snapshot.as_ref(), provider.id.as_str())
+                    });
+                let windows = self
+                    .provider_window_options(provider_id.as_str())
+                    .into_iter()
+                    .filter_map(|kind| {
+                        provider
+                            .windows
+                            .iter()
+                            .find(|window| window.kind == kind)
+                            .map(|window| ProviderWindowOptionSnapshot {
+                                kind: window.kind.clone(),
+                                label: window.label.clone(),
+                                used_percent: window.used_percent,
+                                status: window.status.clone(),
+                                enabled: selected_windows.contains(&window.kind),
+                            })
+                    })
+                    .collect();
                 ProviderOptionSnapshot {
                     id: provider.id.clone(),
                     label: provider.label.clone(),
                     source: provider.source.clone(),
                     plan: provider.plan.clone(),
                     enabled: !self.settings.disabled_provider_ids.contains(&provider_id),
+                    usage_window_limit,
+                    show_image,
+                    accent_color,
+                    image_path: self
+                        .settings
+                        .images
+                        .get(provider_id.as_str())
+                        .map(|path| path.display().to_string()),
+                    validating_image: self.validating_images.contains(provider_id.as_str()),
+                    windows,
                 }
             })
             .collect()
+    }
+
+    fn provider_selected_windows(&self, provider_id: &str) -> Vec<String> {
+        let Some(provider) = self
+            .available_providers
+            .iter()
+            .find(|provider| provider.id.eq_ignore_ascii_case(provider_id))
+        else {
+            return Vec::new();
+        };
+        let configured = self
+            .settings
+            .provider_display
+            .get(provider_id)
+            .map(|settings| {
+                settings
+                    .usage_windows
+                    .iter()
+                    .filter(|kind| provider.windows.iter().any(|window| &window.kind == *kind))
+                    .cloned()
+                    .take(default_usage_window_limit())
+                    .collect::<Vec<_>>()
+            });
+        configured
+            .filter(|windows| !windows.is_empty())
+            .unwrap_or_else(|| {
+                provider
+                    .windows
+                    .iter()
+                    .take(default_usage_window_limit())
+                    .map(|window| window.kind.clone())
+                    .collect()
+            })
+    }
+
+    fn provider_window_options(&self, provider_id: &str) -> Vec<String> {
+        let Some(provider) = self
+            .available_providers
+            .iter()
+            .find(|provider| provider.id.eq_ignore_ascii_case(provider_id))
+        else {
+            return Vec::new();
+        };
+        let selected = self.provider_selected_windows(provider_id);
+        selected
+            .iter()
+            .cloned()
+            .chain(
+                provider
+                    .windows
+                    .iter()
+                    .filter(|window| !selected.iter().any(|kind| kind == &window.kind))
+                    .map(|window| window.kind.clone()),
+            )
+            .collect()
+    }
+
+    fn provider_has_window(&self, provider_id: &str, kind: &str) -> bool {
+        self.available_providers
+            .iter()
+            .find(|provider| provider.id.eq_ignore_ascii_case(provider_id))
+            .is_some_and(|provider| provider.windows.iter().any(|window| window.kind == kind))
     }
 
     fn image_options(&self) -> Vec<ImageOptionSnapshot> {
@@ -1404,6 +1667,22 @@ struct ProviderOptionSnapshot {
     source: String,
     plan: Option<String>,
     enabled: bool,
+    usage_window_limit: usize,
+    show_image: bool,
+    accent_color: Option<String>,
+    image_path: Option<String>,
+    validating_image: bool,
+    windows: Vec<ProviderWindowOptionSnapshot>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderWindowOptionSnapshot {
+    kind: String,
+    label: String,
+    used_percent: u8,
+    status: String,
+    enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1430,6 +1709,28 @@ fn normalize_device_language(value: &str) -> Result<String, String> {
         "ko" | "ko-kr" => Ok("ko".to_string()),
         _ => Err(format!("지원하지 않는 보드 언어입니다: {value}")),
     }
+}
+
+fn provider_accent_color(snapshot: Option<&UsageSnapshot>, provider_id: &str) -> Option<String> {
+    snapshot?
+        .providers
+        .iter()
+        .find(|provider| provider.id.eq_ignore_ascii_case(provider_id))
+        .and_then(|provider| {
+            provider
+                .theme
+                .as_ref()
+                .map(|theme| theme.accent.clone())
+                .or_else(|| provider.theme_color.clone())
+        })
+}
+
+fn is_hex_color(value: &str) -> bool {
+    let value = value.trim();
+    let Some(hex) = value.strip_prefix('#') else {
+        return false;
+    };
+    hex.len() == 6 && hex.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn image_mime(path: &std::path::Path) -> &'static str {

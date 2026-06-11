@@ -10,7 +10,8 @@ use serde_json::Value;
 
 use super::{
     HTTP_TIMEOUT, UsageCollector, UsageProvider, UsageRegistry, UsageTheme, UsageWindow, home_dir,
-    local, percent_from_value, read_json, unix_now, window,
+    local, percent_from_value, read_json, unix_now, window, window_kind_from_key,
+    window_label_from_key,
 };
 
 pub const PROVIDER_ID: &str = "CLAUDE";
@@ -123,8 +124,11 @@ fn fetch_claude_oauth_provider() -> Result<UsageProvider, String> {
 
 fn claude_usage_windows(usage: &Value) -> Vec<UsageWindow> {
     let mut windows = Vec::new();
+    let mut known_keys = Vec::new();
     push_claude_window(&mut windows, usage, "five_hour", "5h", "5h");
+    known_keys.push("five_hour");
     push_claude_window(&mut windows, usage, "seven_day", "7d", "Week");
+    known_keys.push("seven_day");
     push_claude_window(
         &mut windows,
         usage,
@@ -132,7 +136,9 @@ fn claude_usage_windows(usage: &Value) -> Vec<UsageWindow> {
         "7d-sonnet",
         "Sonnet",
     );
+    known_keys.push("seven_day_sonnet");
     push_claude_window(&mut windows, usage, "seven_day_opus", "7d-opus", "Opus");
+    known_keys.push("seven_day_opus");
     push_claude_window(
         &mut windows,
         usage,
@@ -140,22 +146,27 @@ fn claude_usage_windows(usage: &Value) -> Vec<UsageWindow> {
         "7d-oauth",
         "OAuth",
     );
+    known_keys.push("seven_day_oauth_apps");
+    let routine_keys = [
+        "seven_day_routines",
+        "seven_day_claude_routines",
+        "claude_routines",
+        "routines",
+        "routine",
+        "seven_day_cowork",
+        "cowork",
+    ];
     push_first_claude_window(
         &mut windows,
         usage,
-        &[
-            "seven_day_routines",
-            "seven_day_claude_routines",
-            "claude_routines",
-            "routines",
-            "routine",
-            "seven_day_cowork",
-            "cowork",
-        ],
+        &routine_keys,
         "7d-routines",
         "Routines",
     );
+    known_keys.extend(routine_keys);
     push_claude_extra_usage_window(&mut windows, usage);
+    known_keys.push("extra_usage");
+    push_unknown_claude_windows(&mut windows, usage, &known_keys);
     windows
 }
 
@@ -223,6 +234,40 @@ fn push_claude_extra_usage_window(windows: &mut Vec<UsageWindow>, usage: &Value)
         return;
     };
     windows.push(window("extra-usage", "Spend", percent, None, "live"));
+}
+
+fn push_unknown_claude_windows(windows: &mut Vec<UsageWindow>, usage: &Value, known_keys: &[&str]) {
+    let Some(object) = usage.as_object() else {
+        return;
+    };
+    for (key, value) in object {
+        if known_keys.iter().any(|known_key| key == known_key) {
+            continue;
+        }
+        let Some(raw_window) = value.as_object() else {
+            continue;
+        };
+        let Some(percent) = raw_window.get("utilization").and_then(percent_from_value) else {
+            continue;
+        };
+        let Some(kind) = window_kind_from_key(None, key) else {
+            continue;
+        };
+        if windows.iter().any(|window| window.kind == kind) {
+            continue;
+        }
+        let resets_at = raw_window
+            .get("resets_at")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        windows.push(window(
+            kind.as_str(),
+            window_label_from_key(key).as_str(),
+            percent,
+            resets_at,
+            "live",
+        ));
+    }
 }
 
 fn claude_oauth_rate_limited_until(now: u64) -> Option<u64> {
@@ -352,6 +397,7 @@ mod tests {
             "seven_day_opus": { "utilization": 2 },
             "seven_day_oauth_apps": { "utilization": 3 },
             "seven_day_cowork": null,
+            "seven_day_haiku": { "utilization": 7 },
             "extra_usage": {
                 "is_enabled": true,
                 "monthly_limit": 2050,
@@ -381,6 +427,7 @@ mod tests {
                 ("7d-oauth", "OAuth", 3),
                 ("7d-routines", "Routines", 0),
                 ("extra-usage", "Spend", 16),
+                ("seven-day-haiku", "Haiku", 7),
             ]
         );
     }

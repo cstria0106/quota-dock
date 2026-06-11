@@ -438,6 +438,59 @@ pub(crate) fn percent_from_value(value: &serde_json::Value) -> Option<u8> {
     Some(raw.round().clamp(0.0, 100.0) as u8)
 }
 
+pub(crate) fn window_kind_from_key(prefix: Option<&str>, key: &str) -> Option<String> {
+    let slug = slug_key(key);
+    if slug.is_empty() {
+        return None;
+    }
+    Some(match prefix {
+        Some(prefix) => format!("{prefix}-{slug}"),
+        None => slug,
+    })
+}
+
+pub(crate) fn window_label_from_key(key: &str) -> String {
+    let key = key
+        .trim()
+        .trim_start_matches("seven_day_")
+        .trim_start_matches("five_hour_")
+        .trim_end_matches("_window");
+    let mut label = key
+        .split(['_', '-'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if label.is_empty() {
+        label = "Extra".to_string();
+    }
+    if label.chars().count() > 12 {
+        label = label.chars().take(12).collect();
+    }
+    label
+}
+
+fn slug_key(value: &str) -> String {
+    let mut result = String::new();
+    let mut last_was_dash = false;
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            result.push(ch);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            result.push('-');
+            last_was_dash = true;
+        }
+    }
+    result.trim_matches('-').to_string()
+}
+
 pub(crate) fn clamp_percent_i64(value: i64) -> u8 {
     value.clamp(0, 100) as u8
 }

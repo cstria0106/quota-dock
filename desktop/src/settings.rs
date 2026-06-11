@@ -22,11 +22,33 @@ pub struct DesktopSettings {
     #[serde(default)]
     pub disabled_provider_ids: BTreeSet<String>,
     #[serde(default)]
+    pub provider_display: BTreeMap<String, ProviderDisplaySettings>,
+    #[serde(default)]
     pub images: BTreeMap<String, PathBuf>,
     #[serde(default)]
     pub close_to_tray: bool,
     #[serde(default)]
     pub launch_at_startup: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProviderDisplaySettings {
+    #[serde(default)]
+    pub usage_windows: Vec<String>,
+    #[serde(default = "default_show_provider_image")]
+    pub show_image: bool,
+    #[serde(default)]
+    pub accent_color: Option<String>,
+}
+
+impl Default for ProviderDisplaySettings {
+    fn default() -> Self {
+        Self {
+            usage_windows: Vec::new(),
+            show_image: default_show_provider_image(),
+            accent_color: None,
+        }
+    }
 }
 
 impl Default for DesktopSettings {
@@ -38,6 +60,7 @@ impl Default for DesktopSettings {
             sync_interval_secs: DEFAULT_SYNC_INTERVAL_SECS,
             brightness: default_brightness(),
             disabled_provider_ids: BTreeSet::new(),
+            provider_display: BTreeMap::new(),
             images: BTreeMap::new(),
             close_to_tray: false,
             launch_at_startup: false,
@@ -52,6 +75,20 @@ impl DesktopSettings {
             .disabled_provider_ids
             .into_iter()
             .map(|provider_id| provider_id.to_ascii_lowercase())
+            .collect();
+        self.provider_display = self
+            .provider_display
+            .into_iter()
+            .map(|(provider_id, settings)| {
+                (
+                    provider_id.to_ascii_lowercase(),
+                    ProviderDisplaySettings {
+                        usage_windows: dedupe_usage_windows(settings.usage_windows),
+                        show_image: settings.show_image,
+                        accent_color: settings.accent_color.filter(|color| is_hex_color(color)),
+                    },
+                )
+            })
             .collect();
         self
     }
@@ -96,6 +133,31 @@ fn default_sync_interval_secs() -> u64 {
 
 fn default_brightness() -> u8 {
     255
+}
+
+pub fn default_usage_window_limit() -> usize {
+    3
+}
+
+fn default_show_provider_image() -> bool {
+    true
+}
+
+fn dedupe_usage_windows(kinds: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    kinds
+        .into_iter()
+        .filter(|kind| !kind.trim().is_empty())
+        .filter(|kind| seen.insert(kind.clone()))
+        .take(default_usage_window_limit())
+        .collect()
+}
+
+fn is_hex_color(value: &str) -> bool {
+    let Some(hex) = value.trim().strip_prefix('#') else {
+        return false;
+    };
+    hex.len() == 6 && hex.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 #[cfg(test)]

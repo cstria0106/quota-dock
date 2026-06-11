@@ -7,13 +7,15 @@ use std::time::Duration;
 use quota_dock_core::flash::probe_esp32s3;
 use quota_dock_core::http::{http_command, http_status, http_sync, postcard_len};
 use quota_dock_core::serial::{send_serial, send_serial_status, serial_port_names};
+use quota_dock_core::usage::UsageTheme;
 use quota_dock_core::{
     attach_provider_images, collect_snapshot, provider_image_id, validate_provider_image,
     ApiResponse, DeviceCommand, ProviderSelection, ProviderSync, SerialRequest, StatusResponse,
-    SyncPayload, UsagePixelArt, UsageSnapshot,
+    SyncPayload, UsagePixelArt, UsageProvider, UsageSnapshot,
 };
 
 use crate::firmware::flash_bundled_firmware;
+use crate::settings::{default_usage_window_limit, ProviderDisplaySettings};
 
 const SERIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const BOARD_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
@@ -49,6 +51,7 @@ pub enum Task {
         device_url: String,
         language: String,
         disabled_provider_ids: BTreeSet<String>,
+        provider_display: BTreeMap<String, ProviderDisplaySettings>,
         image_paths: BTreeMap<String, PathBuf>,
         force_images: bool,
         clear_image_ids: Vec<String>,
@@ -102,8 +105,18 @@ pub struct BoardDetectionReport {
 pub struct AvailableProvider {
     pub id: String,
     pub label: String,
+    pub accent_color: Option<String>,
     pub source: String,
     pub plan: Option<String>,
+    pub windows: Vec<AvailableWindow>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AvailableWindow {
+    pub kind: String,
+    pub label: String,
+    pub used_percent: u8,
+    pub status: String,
 }
 
 pub struct Worker {
@@ -170,6 +183,7 @@ fn run_task(task: Task) -> TaskResult {
         Task::SyncUsage {
             device_url,
             disabled_provider_ids,
+            provider_display,
             image_paths,
             force_images,
             clear_image_ids,
@@ -181,6 +195,7 @@ fn run_task(task: Task) -> TaskResult {
             device_url,
             language,
             disabled_provider_ids,
+            provider_display,
             image_paths,
             force_images,
             clear_image_ids,
@@ -225,6 +240,7 @@ struct SyncUsageRequest {
     device_url: String,
     language: String,
     disabled_provider_ids: BTreeSet<String>,
+    provider_display: BTreeMap<String, ProviderDisplaySettings>,
     image_paths: BTreeMap<String, PathBuf>,
     force_images: bool,
     clear_image_ids: Vec<String>,
@@ -238,6 +254,7 @@ fn sync_usage(request: SyncUsageRequest) -> SyncReport {
         device_url,
         language,
         disabled_provider_ids,
+        provider_display,
         image_paths,
         force_images,
         clear_image_ids,
@@ -255,6 +272,16 @@ fn sync_usage(request: SyncUsageRequest) -> SyncReport {
             .into_iter()
             .filter(is_available_provider)
             .filter(|provider| !disabled_provider_ids.contains(&provider.id.to_ascii_lowercase()))
+            .map(|mut provider| {
+                apply_provider_display_settings(&mut provider, &provider_display);
+                provider
+            })
+            .filter(|provider| {
+                provider
+                    .windows
+                    .iter()
+                    .any(|window| !window.status.eq_ignore_ascii_case("error"))
+            })
             .collect(),
         updated_at: collected_snapshot.updated_at,
         updated_at_unix: collected_snapshot.updated_at_unix,
@@ -262,7 +289,16 @@ fn sync_usage(request: SyncUsageRequest) -> SyncReport {
     let mut failures = Vec::new();
     let provider_count = snapshot.providers.len();
 
-    let provider_images = match local_provider_images(&snapshot, &image_paths) {
+    let visible_image_paths = image_paths
+        .into_iter()
+        .filter(|(provider_id, _)| {
+            provider_display
+                .get(provider_id.as_str())
+                .map(|settings| settings.show_image)
+                .unwrap_or(true)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let provider_images = match local_provider_images(&snapshot, &visible_image_paths) {
         Ok(provider_images) => provider_images,
         Err(err) => {
             failures.push(err);
@@ -354,12 +390,98 @@ fn collect_usage_data() -> (UsageSnapshot, Vec<AvailableProvider>) {
         .map(|provider| AvailableProvider {
             id: provider.id.clone(),
             label: provider.label.clone(),
+            accent_color: provider
+                .theme
+                .as_ref()
+                .map(|theme| theme.accent.clone())
+                .or_else(|| provider.theme_color.clone()),
             source: provider.source.clone(),
             plan: provider.plan.clone(),
+            windows: provider
+                .windows
+                .iter()
+                .map(|window| AvailableWindow {
+                    kind: window.kind.clone(),
+                    label: window.label.clone(),
+                    used_percent: window.used_percent,
+                    status: window.status.clone(),
+                })
+                .collect(),
         })
         .collect::<Vec<_>>();
 
     (collected_snapshot, available_providers)
+}
+
+fn apply_provider_display_settings(
+    provider: &mut UsageProvider,
+    settings: &BTreeMap<String, ProviderDisplaySettings>,
+) {
+    let provider_id = provider.id.to_ascii_lowercase();
+    let Some(settings) = settings.get(provider_id.as_str()) else {
+        provider.windows.truncate(default_usage_window_limit());
+        return;
+    };
+    if !settings.show_image {
+        provider.pixel_art = None;
+    }
+    if let Some(accent_color) = settings.accent_color.as_deref() {
+        provider.theme_color = Some(accent_color.to_string());
+        provider.theme = Some(theme_from_accent(accent_color));
+    }
+
+    if settings.usage_windows.is_empty() {
+        provider.windows.truncate(default_usage_window_limit());
+        return;
+    }
+
+    let available = std::mem::take(&mut provider.windows);
+    provider.windows = settings
+        .usage_windows
+        .iter()
+        .filter_map(|kind| {
+            available
+                .iter()
+                .find(|window| &window.kind == kind)
+                .cloned()
+        })
+        .take(default_usage_window_limit())
+        .collect();
+}
+
+fn theme_from_accent(accent: &str) -> UsageTheme {
+    let (red, green, blue) = parse_hex_color(accent).unwrap_or((59, 130, 246));
+    UsageTheme {
+        accent: accent.to_string(),
+        panel: mix_hex((red, green, blue), (10, 14, 20), 0.16),
+        panel_soft: mix_hex((red, green, blue), (17, 24, 39), 0.22),
+        primary_panel: mix_hex((red, green, blue), (13, 18, 26), 0.18),
+        primary_panel_soft: mix_hex((red, green, blue), (20, 28, 40), 0.26),
+        track: mix_hex((red, green, blue), (35, 43, 55), 0.22),
+        pill: mix_hex((red, green, blue), (31, 41, 55), 0.32),
+    }
+}
+
+fn parse_hex_color(value: &str) -> Option<(u8, u8, u8)> {
+    let hex = value.trim().strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    Some((
+        u8::from_str_radix(&hex[0..2], 16).ok()?,
+        u8::from_str_radix(&hex[2..4], 16).ok()?,
+        u8::from_str_radix(&hex[4..6], 16).ok()?,
+    ))
+}
+
+fn mix_hex(foreground: (u8, u8, u8), background: (u8, u8, u8), amount: f32) -> String {
+    let mix = |fg: u8, bg: u8| ((fg as f32 * amount) + (bg as f32 * (1.0 - amount))).round() as u8;
+    format!(
+        "#{:02X}{:02X}{:02X}",
+        mix(foreground.0, background.0),
+        mix(foreground.1, background.1),
+        mix(foreground.2, background.2)
+    )
 }
 
 fn is_available_provider(provider: &quota_dock_core::UsageProvider) -> bool {

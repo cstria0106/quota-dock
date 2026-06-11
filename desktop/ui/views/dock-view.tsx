@@ -3,12 +3,16 @@ import {
   Gauge,
   ImagePlus,
   MonitorDot,
+  Palette,
+  Plus,
   RefreshCw,
   Repeat,
+  RotateCcw,
   ScrollText,
   SlidersHorizontal,
   Trash2,
   Wrench,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -57,8 +61,8 @@ import { cn } from "@/lib/utils";
 import type {
   AppSnapshot,
   DockSnapshot,
-  ImageOptionSnapshot,
   ProviderOptionSnapshot,
+  ProviderWindowOptionSnapshot,
   RunCommand,
   UsageProvider,
   UsageSnapshot,
@@ -427,12 +431,6 @@ function DeviceSection({
         providers={dock.availableProviders}
         t={t}
       />
-      <ImagesPanel
-        advanced={advanced}
-        images={dock.imageOptions}
-        onRunCommand={onRunCommand}
-        t={t}
-      />
       <DevicePanel
         advanced={advanced}
         brightnessDraft={brightnessDraft}
@@ -523,7 +521,7 @@ function ProvidersPanel({
   t: TFunction;
 }) {
   return (
-    <Card className="rounded-xl">
+    <Card className="rounded-xl lg:col-span-2">
       <CardHeader className="border-b">
         <CardTitle>{t("dock.providers.title")}</CardTitle>
       </CardHeader>
@@ -531,74 +529,15 @@ function ProvidersPanel({
         {providers.length === 0 ? (
           <EmptyState label={t("dock.providers.empty")} />
         ) : (
-          <div className="grid gap-3">
-            {providers.map((provider, index) => {
-              const meta = advanced
-                ? [provider.source, provider.plan].filter(Boolean).join(" · ")
-                : provider.plan;
-              return (
-                <React.Fragment key={provider.id}>
-                  {index > 0 ? <Separator /> : null}
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate font-medium">{provider.label}</div>
-                      {meta ? (
-                        <div className="truncate text-sm text-muted-foreground">
-                          {meta}
-                        </div>
-                      ) : null}
-                    </div>
-                    <Switch
-                      checked={provider.enabled}
-                      onCheckedChange={(enabled) => {
-                        void onRunCommand("set_provider_enabled", {
-                          providerId: provider.id,
-                          enabled,
-                        });
-                      }}
-                    />
-                  </div>
-                </React.Fragment>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function ImagesPanel({
-  advanced,
-  images,
-  onRunCommand,
-  t,
-}: {
-  advanced: boolean;
-  images: ImageOptionSnapshot[];
-  onRunCommand: RunCommand;
-  t: TFunction;
-}) {
-  return (
-    <Card className="rounded-xl">
-      <CardHeader className="border-b">
-        <CardTitle>{t("dock.images.title")}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {images.length === 0 ? (
-          <EmptyState label={t("dock.images.empty")} />
-        ) : (
-          <div className="grid gap-3">
-            {images.map((image, index) => (
-              <React.Fragment key={image.id}>
-                {index > 0 ? <Separator /> : null}
-                <ImageRow
-                  advanced={advanced}
-                  image={image}
-                  onRunCommand={onRunCommand}
-                  t={t}
-                />
-              </React.Fragment>
+          <div className="grid gap-5">
+            {providers.map((provider) => (
+              <ProviderSettingsCard
+                advanced={advanced}
+                key={provider.id}
+                onRunCommand={onRunCommand}
+                provider={provider}
+                t={t}
+              />
             ))}
           </div>
         )}
@@ -607,27 +546,33 @@ function ImagesPanel({
   );
 }
 
-function ImageRow({
+function ProviderSettingsCard({
   advanced,
-  image,
   onRunCommand,
+  provider,
   t,
 }: {
   advanced: boolean;
-  image: ImageOptionSnapshot;
   onRunCommand: RunCommand;
+  provider: ProviderOptionSnapshot;
   t: TFunction;
 }) {
   const [preview, setPreview] = React.useState<string | null>(null);
+  const meta = advanced
+    ? [provider.source, provider.plan].filter(Boolean).join(" · ")
+    : provider.plan;
+  const visibleWindows = provider.windows
+    .filter((window) => window.enabled)
+    .slice(0, provider.usageWindowLimit);
 
   React.useEffect(() => {
     let cancelled = false;
-    if (!image.path || image.validating) {
+    if (!provider.imagePath || provider.validatingImage || !provider.showImage) {
       setPreview(null);
       return;
     }
     void invoke<string | null>("provider_image_preview", {
-      providerId: image.id,
+      providerId: provider.id,
     })
       .then((value) => {
         if (!cancelled) {
@@ -642,61 +587,368 @@ function ImageRow({
     return () => {
       cancelled = true;
     };
-  }, [image.id, image.path, image.validating]);
-
-  const detail = image.path
-    ? advanced
-      ? image.path
-      : image.label
-    : t("dock.images.none");
+  }, [provider.id, provider.imagePath, provider.showImage, provider.validatingImage]);
 
   return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2">
-      <span className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted">
-        {preview ? (
-          <img
-            alt={image.label}
-            src={preview}
-            className="size-full object-contain"
-          />
-        ) : (
-          <ImagePlus className="size-4 text-muted-foreground" />
-        )}
-      </span>
-      <div className="min-w-0">
-        <div className="truncate font-medium">{image.label}</div>
-        <div className="truncate text-sm text-muted-foreground">{detail}</div>
+    <div className="grid gap-4 rounded-lg border p-4">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-medium">{provider.label}</div>
+          {meta ? (
+            <div className="truncate text-sm text-muted-foreground">{meta}</div>
+          ) : null}
+        </div>
+        <Switch
+          checked={provider.enabled}
+          onCheckedChange={(enabled) => {
+            void onRunCommand("set_provider_enabled", {
+              providerId: provider.id,
+              enabled,
+            });
+          }}
+        />
       </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        disabled={image.validating}
-        title={t("dock.images.choose")}
-        onClick={() => {
-          void onRunCommand("choose_provider_image", {
-            providerId: image.id,
-          });
-        }}
-      >
-        <ImagePlus />
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        disabled={!image.path}
-        title={t("dock.images.clear")}
-        onClick={() => {
-          void onRunCommand("clear_provider_image", {
-            providerId: image.id,
-          });
-        }}
-      >
-        <Trash2 />
-      </Button>
+
+      {provider.enabled ? (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
+          <QuotaPreview
+            accentColor={provider.accentColor ?? "#3B82F6"}
+            availableWindows={provider.windows}
+            image={provider.showImage ? preview : null}
+            onSlotChange={(slot, kind) => {
+              void onRunCommand("set_provider_window_slot", {
+                providerId: provider.id,
+                slot,
+                kind,
+              });
+            }}
+            onSlotRemove={(slot) => {
+              void onRunCommand("remove_provider_window", {
+                providerId: provider.id,
+                slot,
+              });
+            }}
+            onWindowAdd={(kind) => {
+              void onRunCommand("add_provider_window", {
+                providerId: provider.id,
+                kind,
+              });
+            }}
+            t={t}
+            windows={visibleWindows}
+          />
+          <div className="grid content-start gap-4">
+            <ImageControls
+              onRunCommand={onRunCommand}
+              provider={provider}
+              t={t}
+            />
+            <ColorControl
+              color={provider.accentColor ?? "#3B82F6"}
+              onChange={(color) => {
+                void onRunCommand("set_provider_accent_color", {
+                  providerId: provider.id,
+                  color,
+                });
+              }}
+              onReset={() => {
+                void onRunCommand("reset_provider_accent_color", {
+                  providerId: provider.id,
+                });
+              }}
+              t={t}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function ImageControls({
+  onRunCommand,
+  provider,
+  t,
+}: {
+  onRunCommand: RunCommand;
+  provider: ProviderOptionSnapshot;
+  t: TFunction;
+}) {
+  return (
+    <div className="grid gap-2">
+      <div className="flex items-center justify-between gap-3">
+        <Label>{t("dock.providers.image")}</Label>
+        <Switch
+          checked={provider.showImage}
+          onCheckedChange={(visible) => {
+            void onRunCommand("set_provider_image_visible", {
+              providerId: provider.id,
+              visible,
+            });
+          }}
+        />
+      </div>
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={provider.validatingImage}
+          onClick={() => {
+            void onRunCommand("choose_provider_image", {
+              providerId: provider.id,
+            });
+          }}
+        >
+          <ImagePlus />
+          {t("dock.images.choose")}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          disabled={!provider.imagePath}
+          title={t("dock.images.clear")}
+          onClick={() => {
+            void onRunCommand("clear_provider_image", {
+              providerId: provider.id,
+            });
+          }}
+        >
+          <Trash2 />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ColorControl({
+  color,
+  onChange,
+  onReset,
+  t,
+}: {
+  color: string;
+  onChange: (color: string) => void;
+  onReset: () => void;
+  t: TFunction;
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label>{t("dock.providers.accent")}</Label>
+      <div className="flex gap-2">
+        <label className="relative grid size-9 place-items-center overflow-hidden rounded-md border">
+          <Palette className="pointer-events-none absolute size-4 text-muted-foreground" />
+          <input
+            aria-label="강조색"
+            className="size-12 cursor-pointer opacity-0"
+            type="color"
+            value={color}
+            onChange={(event) => onChange(event.currentTarget.value)}
+          />
+        </label>
+        <Badge variant="secondary" className="min-w-24 justify-center">
+          {color}
+        </Badge>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          title={t("dock.providers.defaultColor")}
+          onClick={onReset}
+        >
+          <RotateCcw />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function QuotaPreview({
+  accentColor,
+  availableWindows,
+  image,
+  onSlotChange,
+  onSlotRemove,
+  onWindowAdd,
+  t,
+  windows,
+}: {
+  accentColor: string;
+  availableWindows: ProviderWindowOptionSnapshot[];
+  image: string | null;
+  onSlotChange: (slot: number, kind: string) => void;
+  onSlotRemove: (slot: number) => void;
+  onWindowAdd: (kind: string) => void;
+  t: TFunction;
+  windows: ProviderWindowOptionSnapshot[];
+}) {
+  const panelStyle = previewTheme(accentColor);
+  const addOptions = availableWindows.filter(
+    (option) => !windows.some((window) => window.kind === option.kind),
+  );
+  if (windows.length === 0) {
+    return <EmptyState label={t("dock.providers.noWindows")} />;
+  }
+
+  return (
+    <div className="grid aspect-[5/3] min-h-52 content-center gap-3 rounded-lg border bg-zinc-950 p-4">
+      <PreviewUsageCard
+        availableWindows={availableWindows}
+        image={image}
+        onWindowChange={(kind) => onSlotChange(0, kind)}
+        onWindowRemove={windows.length > 1 ? () => onSlotRemove(0) : undefined}
+        primary
+        style={panelStyle}
+        window={windows[0]}
+      />
+      {windows.length === 1 && addOptions.length > 0 ? (
+        <PreviewAddCard
+          options={addOptions}
+          onAdd={onWindowAdd}
+          style={panelStyle}
+        />
+      ) : null}
+      {windows.length === 2 ? (
+        <div className="grid grid-cols-2 gap-3">
+          <PreviewUsageCard
+            availableWindows={availableWindows}
+            onWindowChange={(kind) => onSlotChange(1, kind)}
+            onWindowRemove={() => onSlotRemove(1)}
+            style={panelStyle}
+            window={windows[1]}
+          />
+          {addOptions.length > 0 ? (
+            <PreviewAddCard
+              options={addOptions}
+              onAdd={onWindowAdd}
+              style={panelStyle}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {windows.length >= 3 ? (
+        <div className="grid grid-cols-2 gap-3">
+          <PreviewUsageCard
+            availableWindows={availableWindows}
+            onWindowChange={(kind) => onSlotChange(1, kind)}
+            onWindowRemove={() => onSlotRemove(1)}
+            style={panelStyle}
+            window={windows[1]}
+          />
+          <PreviewUsageCard
+            availableWindows={availableWindows}
+            onWindowChange={(kind) => onSlotChange(2, kind)}
+            onWindowRemove={() => onSlotRemove(2)}
+            style={panelStyle}
+            window={windows[2]}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PreviewAddCard({
+  onAdd,
+  options,
+  style,
+}: {
+  onAdd: (kind: string) => void;
+  options: ProviderWindowOptionSnapshot[];
+  style: React.CSSProperties;
+}) {
+  return (
+    <div
+      className="grid min-h-20 place-items-center rounded-md border border-dashed border-white/20 p-3 text-white"
+      style={style}
+    >
+      <Select onValueChange={onAdd}>
+        <SelectTrigger className="size-10 rounded-full border-white/10 bg-black/25 p-0 text-white">
+          <Plus className="mx-auto size-5" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.kind} value={option.kind}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function PreviewUsageCard({
+  availableWindows,
+  image,
+  onWindowChange,
+  onWindowRemove,
+  primary = false,
+  style,
+  window,
+}: {
+  availableWindows: ProviderWindowOptionSnapshot[];
+  image?: string | null;
+  onWindowChange: (kind: string) => void;
+  onWindowRemove?: () => void;
+  primary?: boolean;
+  style: React.CSSProperties;
+  window: ProviderWindowOptionSnapshot;
+}) {
+  const percent = boundedPercent(window.used_percent);
+  return (
+    <div
+      className={cn(
+        "relative grid min-h-20 gap-3 rounded-md p-3 text-white",
+        primary && image ? "grid-cols-[4.5rem_minmax(0,1fr)] items-center" : "",
+      )}
+      style={style}
+    >
+      {onWindowRemove ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="absolute top-2 right-2 size-6 border-white/10 bg-black/25 text-white hover:bg-black/40 hover:text-white"
+          onClick={onWindowRemove}
+        >
+          <X className="size-3" />
+        </Button>
+      ) : null}
+      {primary && image ? (
+        <span className="grid aspect-square place-items-center overflow-hidden rounded-md bg-black/20">
+          <img alt="" className="size-full object-contain" src={image} />
+        </span>
+      ) : null}
+      <div className="grid min-w-0 content-center gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-2xl font-semibold tabular-nums">
+            {Math.round(percent)}%
+          </span>
+          <Select value={window.kind} onValueChange={onWindowChange}>
+            <SelectTrigger className="h-7 w-auto min-w-20 rounded-full border-white/10 bg-black/25 px-2 py-1 text-xs text-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {availableWindows.map((option) => (
+                <SelectItem key={option.kind} value={option.kind}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Progress value={percent} />
+      </div>
+    </div>
+  );
+}
+
+function previewTheme(accentColor: string): React.CSSProperties {
+  return {
+    background: `linear-gradient(135deg, ${accentColor}2E, #111827)`,
+    borderColor: `${accentColor}44`,
+  };
 }
 
 function DevicePanel({
