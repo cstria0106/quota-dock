@@ -5,6 +5,10 @@ edition = "2021"
 resolver = "2"
 
 [dependencies]
+dirs = "6.0"
 eframe = "0.34"
 egui = "0.34"
-monitor-core = { path = "../core" }
+monitor-core = { path = "../core", features = ["flash"] }
+rfd = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9"

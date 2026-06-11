@@ -139,6 +139,42 @@ pub fn collect_snapshot(selection: ProviderSelection) -> UsageSnapshot {
     UsageRegistry::with_default_providers().collect_snapshot(selection)
 }
 
+pub fn collect_configured_snapshot(
+    config_path: &Path,
+    selection: ProviderSelection,
+    include_images: bool,
+) -> Result<UsageSnapshot, String> {
+    let mut snapshot = collect_snapshot(selection);
+    apply_configured_images(&mut snapshot, config_path, include_images)?;
+    Ok(snapshot)
+}
+
+pub fn apply_configured_images(
+    snapshot: &mut UsageSnapshot,
+    config_path: &Path,
+    include_images: bool,
+) -> Result<(), String> {
+    if !include_images {
+        strip_provider_images(snapshot);
+        return Ok(());
+    }
+
+    if !config_path.is_file() {
+        return Ok(());
+    }
+    let Some(usage_config) = crate::config::read_config_file(config_path)?.usage else {
+        return Ok(());
+    };
+    if usage_config.images.is_empty() {
+        return Ok(());
+    }
+    attach_provider_images(snapshot, &usage_config.images, config_path)
+}
+
+pub fn validate_provider_image(path: &Path) -> Result<UsagePixelArt, String> {
+    pixel_art_from_image(path)
+}
+
 pub fn attach_provider_images(
     snapshot: &mut UsageSnapshot,
     image_paths: &BTreeMap<String, PathBuf>,
@@ -561,6 +597,44 @@ mod tests {
         assert_eq!(art.palette, vec!["#123456".to_string()]);
 
         fs::remove_file(image_path).expect("remove image");
+        fs::remove_dir(dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn applies_and_strips_configured_provider_images() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let config_path = dir.join("config.toml");
+        let image_path = dir.join("provider.png");
+        let mut image = RgbaImage::new(4, 4);
+        image.put_pixel(1, 1, image::Rgba([0x12, 0x34, 0x56, 0xff]));
+        image.save(&image_path).expect("save image");
+        fs::write(&config_path, "[usage.images]\ncodex = \"provider.png\"\n")
+            .expect("write config");
+        let mut snapshot = UsageSnapshot {
+            providers: vec![UsageProvider {
+                id: codex::PROVIDER_ID.to_string(),
+                label: "CODEX".to_string(),
+                theme_color: None,
+                theme: None,
+                pixel_art: None,
+                source: "test".to_string(),
+                account: None,
+                plan: None,
+                windows: Vec::new(),
+            }],
+            updated_at: "test".to_string(),
+            updated_at_unix: 1,
+        };
+
+        apply_configured_images(&mut snapshot, &config_path, true).expect("attach image");
+        assert!(snapshot.providers[0].pixel_art.is_some());
+
+        apply_configured_images(&mut snapshot, &config_path, false).expect("strip image");
+        assert!(snapshot.providers[0].pixel_art.is_none());
+
+        fs::remove_file(image_path).expect("remove image");
+        fs::remove_file(config_path).expect("remove config");
         fs::remove_dir(dir).expect("remove temp dir");
     }
 

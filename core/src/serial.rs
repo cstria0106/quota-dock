@@ -54,7 +54,10 @@ pub fn send_serial_status(
     let reply = send_serial_reply(port_name, baud, &SerialRequest::Status, timeout)?;
     match reply {
         SerialReply::Status(status) => Ok(status),
-        SerialReply::Api(response) => Err(format!("expected status serial reply: {}", response.message)),
+        SerialReply::Api(response) => Err(format!(
+            "expected status serial reply: {}",
+            response.message
+        )),
     }
 }
 

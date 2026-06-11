@@ -10,12 +10,34 @@ use serialport::{FlowControl, SerialPortType, UsbPortInfo};
 
 use crate::config::FlashInputs;
 
+pub struct FlashImages<'a> {
+    pub firmware: &'a [u8],
+    pub bootloader: &'a [u8],
+    pub partition_table: &'a [u8],
+    pub offset: &'a str,
+}
+
 pub fn flash_firmware(inputs: &FlashInputs, port: &str, baud: u32) -> Result<(), String> {
     flash_bin(
         &inputs.firmware_bin,
         &inputs.bootloader_bin,
         &inputs.partition_table_bin,
         &inputs.offset,
+        port,
+        baud,
+    )
+}
+
+pub fn flash_firmware_images(
+    images: &FlashImages<'_>,
+    port: &str,
+    baud: u32,
+) -> Result<(), String> {
+    flash_image_bytes(
+        images.firmware,
+        images.bootloader,
+        images.partition_table,
+        images.offset,
         port,
         baud,
     )
@@ -48,7 +70,6 @@ pub fn flash_bin(
         ));
     }
 
-    let app_offset = parse_u32(offset)?;
     let firmware = fs::read(firmware_bin)
         .map_err(|err| format!("read firmware bin {}: {err}", firmware_bin.display()))?;
     let bootloader = fs::read(bootloader_bin)
@@ -60,18 +81,39 @@ pub fn flash_bin(
         )
     })?;
 
+    flash_image_bytes(&firmware, &bootloader, &partition_table, offset, port, baud)
+}
+
+fn flash_image_bytes(
+    firmware: &[u8],
+    bootloader: &[u8],
+    partition_table: &[u8],
+    offset: &str,
+    port: &str,
+    baud: u32,
+) -> Result<(), String> {
+    if firmware.is_empty() {
+        return Err("firmware image is empty".to_string());
+    }
+    if bootloader.is_empty() {
+        return Err("bootloader image is empty".to_string());
+    }
+    if partition_table.is_empty() {
+        return Err("partition table image is empty".to_string());
+    }
+
     let segments = [
         Segment {
-            addr: app_offset,
-            data: Cow::Borrowed(firmware.as_slice()),
+            addr: parse_u32(offset)?,
+            data: Cow::Borrowed(firmware),
         },
         Segment {
             addr: 0x0,
-            data: Cow::Borrowed(bootloader.as_slice()),
+            data: Cow::Borrowed(bootloader),
         },
         Segment {
             addr: 0x8000,
-            data: Cow::Borrowed(partition_table.as_slice()),
+            data: Cow::Borrowed(partition_table),
         },
     ];
     let mut flasher = connect_flasher(port, baud)?;

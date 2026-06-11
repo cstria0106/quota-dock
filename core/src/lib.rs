@@ -37,5 +37,6 @@ pub use config::{
 pub use serial::SerialRequest;
 pub use usage::{
     ProviderSelection, UsageCollector, UsagePixelArt, UsageProvider, UsageProviderUpdate,
-    UsageRegistry, UsageSnapshot, UsageWindow, attach_provider_images, strip_provider_images,
+    UsageRegistry, UsageSnapshot, UsageWindow, apply_configured_images, attach_provider_images,
+    collect_configured_snapshot, collect_snapshot, strip_provider_images, validate_provider_image,
 };

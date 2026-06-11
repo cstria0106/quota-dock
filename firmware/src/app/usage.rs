@@ -54,8 +54,9 @@ pub fn cache_provider_images(snapshot: &mut UsageSnapshot, cache: &mut ProviderI
         let Some(pixel_art) = provider.pixel_art.take() else {
             continue;
         };
-        if let Some(art) = PackedPixelArt::from_wire(&pixel_art) {
-            cache.upsert(provider.id.as_str(), art);
+        match PackedPixelArt::from_wire(&pixel_art) {
+            Some(art) => cache.upsert(provider.id.as_str(), art),
+            None => cache.remove(provider.id.as_str()),
         }
     }
 }
@@ -84,6 +85,16 @@ impl ProviderImageCache {
         });
         if self.entries.len() > MAX_CACHED_PROVIDER_IMAGES {
             self.entries.remove(0);
+        }
+    }
+
+    fn remove(&mut self, provider_id: &str) {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.provider_id.eq_ignore_ascii_case(provider_id))
+        {
+            self.entries.remove(index);
         }
     }
 }
