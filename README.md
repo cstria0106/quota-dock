@@ -1,10 +1,11 @@
 # QuotaDock
 
-[한국어](README.ko.md)
+[한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh.md)
 
 A small desk gadget that shows your remaining Claude and Codex usage on a compact AMOLED display.
 
 ![QuotaDock display](docs/assets/quotadock-display.png)
+![QuotaDock Korean display](docs/assets/quotadock-display-ko.png)
 
 ## Requirements
 

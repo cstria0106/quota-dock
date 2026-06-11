@@ -1,10 +1,11 @@
 # QuotaDock
 
-[English](README.md)
+[English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh.md)
 
 책상 위 작은 AMOLED 화면에 Claude와 Codex의 남은 사용량을 띄워주는 데스크 가젯입니다.
 
 ![QuotaDock 화면](docs/assets/quotadock-display.png)
+![QuotaDock 한국어 화면](docs/assets/quotadock-display-ko.png)
 
 ## 준비물
 
