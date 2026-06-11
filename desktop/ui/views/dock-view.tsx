@@ -178,20 +178,31 @@ export function DockView({
           <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
             <ErrorNotice message={dock.saveError ?? commandError} />
 
-            {active === "usage" ? (
-              <UsageList advanced={advanced} snapshot={dock.usageSnapshot} t={t} />
-            ) : active === "device" ? (
-              <DeviceSection
-                advanced={advanced}
-                brightnessDraft={brightnessDraft}
-                dock={dock}
-                onBrightnessDraft={onBrightnessDraft}
-                onRunCommand={onRunCommand}
-                t={t}
-              />
-            ) : (
-              <ActivityLog lines={snapshot.log} />
-            )}
+            <div
+              key={active}
+              className="flex flex-col gap-4 duration-200 animate-in fade-in"
+            >
+              {active === "usage" ? (
+                <UsageList
+                  advanced={advanced}
+                  onRunCommand={onRunCommand}
+                  snapshot={dock.usageSnapshot}
+                  syncRunning={dock.syncRunning}
+                  t={t}
+                />
+              ) : active === "device" ? (
+                <DeviceSection
+                  advanced={advanced}
+                  brightnessDraft={brightnessDraft}
+                  dock={dock}
+                  onBrightnessDraft={onBrightnessDraft}
+                  onRunCommand={onRunCommand}
+                  t={t}
+                />
+              ) : (
+                <ActivityLog lines={snapshot.log} />
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -332,17 +343,32 @@ function NavButton({
 
 function UsageList({
   advanced,
+  onRunCommand,
   snapshot,
+  syncRunning,
   t,
 }: {
   advanced: boolean;
+  onRunCommand: RunCommand;
   snapshot?: UsageSnapshot | null;
+  syncRunning: boolean;
   t: TFunction;
 }) {
   if (!snapshot || snapshot.providers.length === 0) {
     return (
       <EmptyState
+        icon={Gauge}
         label={`${t("dock.usage.empty")} · ${t("dock.usage.emptyHint")}`}
+        action={
+          <Button
+            type="button"
+            disabled={syncRunning}
+            onClick={() => void onRunCommand("sync_now")}
+          >
+            <RefreshCw className={cn(syncRunning && "animate-spin")} />
+            {syncRunning ? t("dock.syncing") : t("dock.sync")}
+          </Button>
+        }
       />
     );
   }
@@ -421,7 +447,7 @@ function DeviceSection({
   t: TFunction;
 }) {
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="grid gap-4">
       <ProvidersPanel
         advanced={advanced}
         onRunCommand={onRunCommand}
@@ -453,7 +479,7 @@ function SettingsPanel({
   const { advanced, setAdvanced, locale, setLocale } = useSettings();
 
   return (
-    <Card className="rounded-xl lg:col-span-2">
+    <Card className="rounded-xl">
       <CardHeader className="border-b">
         <CardTitle>{t("settings.title")}</CardTitle>
       </CardHeader>
@@ -518,7 +544,7 @@ function ProvidersPanel({
   t: TFunction;
 }) {
   return (
-    <Card className="rounded-xl lg:col-span-2">
+    <Card className="rounded-xl">
       <CardHeader className="border-b">
         <CardTitle>{t("dock.providers.title")}</CardTitle>
       </CardHeader>
@@ -849,6 +875,7 @@ function QuotaPreview({
         onImageClear={onImageClear}
         onWindowChange={(kind) => onSlotChange(0, kind)}
         primary
+        t={t}
         theme={theme}
         validatingImage={validatingImage}
         window={windows[0]}
@@ -858,6 +885,7 @@ function QuotaPreview({
           <PreviewUsageCard
             availableWindows={availableWindows}
             onWindowChange={(kind) => onSlotChange(1, kind)}
+            t={t}
             theme={theme}
             window={windows[1]}
           />
@@ -868,12 +896,14 @@ function QuotaPreview({
           <PreviewUsageCard
             availableWindows={availableWindows}
             onWindowChange={(kind) => onSlotChange(1, kind)}
+            t={t}
             theme={theme}
             window={windows[1]}
           />
           <PreviewUsageCard
             availableWindows={availableWindows}
             onWindowChange={(kind) => onSlotChange(2, kind)}
+            t={t}
             theme={theme}
             window={windows[2]}
           />
@@ -891,6 +921,7 @@ function PreviewUsageCard({
   onImageClear,
   onWindowChange,
   primary = false,
+  t,
   theme,
   validatingImage = false,
   window,
@@ -902,6 +933,7 @@ function PreviewUsageCard({
   onImageClear?: () => void;
   onWindowChange: (kind: string) => void;
   primary?: boolean;
+  t: TFunction;
   theme: PreviewTheme;
   validatingImage?: boolean;
   window: ProviderWindowOptionSnapshot;
@@ -932,7 +964,7 @@ function PreviewUsageCard({
               className="size-6 border-white/10 bg-black/25 text-white hover:bg-black/40 hover:text-white"
               disabled={validatingImage}
               onClick={onImageChoose}
-              title="이미지 선택"
+              title={t("dock.images.choose")}
             >
               <ImagePlus className="size-3" />
             </Button>
@@ -943,7 +975,7 @@ function PreviewUsageCard({
               className="size-6 border-white/10 bg-black/25 text-white hover:bg-black/40 hover:text-white"
               disabled={!imagePath}
               onClick={onImageClear}
-              title="이미지 제거"
+              title={t("dock.images.clear")}
             >
               <Trash2 className="size-3" />
             </Button>
@@ -1038,7 +1070,7 @@ function DevicePanel({
   const brightnessPercent = Math.round((brightnessDraft / 255) * 100);
 
   return (
-    <Card className="rounded-xl lg:col-span-2">
+    <Card className="rounded-xl">
       <CardHeader className="border-b">
         <CardTitle>{t("dock.device.title")}</CardTitle>
       </CardHeader>

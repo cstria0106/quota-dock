@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { MonitorDot } from "lucide-react";
 import * as React from "react";
 
 import { Spinner } from "@/components/feedback";
@@ -9,7 +10,7 @@ import { DockView } from "@/views/dock-view";
 import { SetupView } from "@/views/setup-view";
 
 export function App() {
-  const { locale } = useSettings();
+  const { locale, t } = useSettings();
   const [snapshot, setSnapshot] = React.useState<AppSnapshot | null>(null);
   const [commandError, setCommandError] = React.useState<string | null>(null);
   const [flashConfirmOpen, setFlashConfirmOpen] = React.useState(false);
@@ -102,7 +103,17 @@ export function App() {
   if (!snapshot) {
     return (
       <main className="grid h-full place-items-center bg-background">
-        <Spinner />
+        <div className="flex flex-col items-center gap-5 duration-300 animate-in fade-in">
+          <span className="grid size-14 place-items-center rounded-2xl bg-primary/10 text-primary">
+            <MonitorDot className="size-7" />
+          </span>
+          <div className="flex flex-col items-center gap-3">
+            <span className="text-sm font-semibold tracking-tight text-foreground">
+              {t("app.title")}
+            </span>
+            <Spinner />
+          </div>
+        </div>
       </main>
     );
   }
