@@ -26,11 +26,12 @@ export type CommandName =
   | "set_device_language"
   | "set_provider_enabled"
   | "set_provider_window_slot"
+  | "set_provider_window_count"
   | "add_provider_window"
   | "remove_provider_window"
   | "set_provider_image_visible"
-  | "set_provider_accent_color"
-  | "reset_provider_accent_color"
+  | "set_provider_theme_color"
+  | "reset_provider_theme_colors"
   | "choose_provider_image"
   | "clear_provider_image"
   | "set_brightness"
@@ -98,7 +99,11 @@ export interface ProviderOptionSnapshot {
   usageWindowLimit: number;
   showImage: boolean;
   accentColor?: string | null;
+  primaryPanelColor?: string | null;
+  trackColor?: string | null;
+  pillColor?: string | null;
   imagePath?: string | null;
+  imageRevision: number;
   validatingImage: boolean;
   windows: ProviderWindowOptionSnapshot[];
 }
@@ -106,7 +111,7 @@ export interface ProviderOptionSnapshot {
 export interface ProviderWindowOptionSnapshot {
   kind: string;
   label: string;
-  used_percent: number;
+  usedPercent: number;
   status: string;
   enabled: boolean;
 }

@@ -87,6 +87,7 @@ pub enum TaskResult {
 #[derive(Clone, Debug)]
 pub struct SyncReport {
     pub snapshot: UsageSnapshot,
+    pub collected_snapshot: UsageSnapshot,
     pub available_providers: Vec<AvailableProvider>,
     pub ok: bool,
     pub sent_images: bool,
@@ -106,6 +107,9 @@ pub struct AvailableProvider {
     pub id: String,
     pub label: String,
     pub accent_color: Option<String>,
+    pub primary_panel_color: Option<String>,
+    pub track_color: Option<String>,
+    pub pill_color: Option<String>,
     pub source: String,
     pub plan: Option<String>,
     pub windows: Vec<AvailableWindow>,
@@ -266,6 +270,7 @@ fn sync_usage(request: SyncUsageRequest) -> SyncReport {
         (false, Some(snapshot)) => (snapshot, cached_available_providers),
         _ => collect_usage_data(),
     };
+    let raw_snapshot = collected_snapshot.clone();
     let mut snapshot = UsageSnapshot {
         providers: collected_snapshot
             .providers
@@ -372,6 +377,7 @@ fn sync_usage(request: SyncUsageRequest) -> SyncReport {
 
     SyncReport {
         snapshot,
+        collected_snapshot: raw_snapshot,
         available_providers,
         ok,
         sent_images: force_images || image_update_count > 0 || !clear_image_ids.is_empty(),
@@ -395,6 +401,12 @@ fn collect_usage_data() -> (UsageSnapshot, Vec<AvailableProvider>) {
                 .as_ref()
                 .map(|theme| theme.accent.clone())
                 .or_else(|| provider.theme_color.clone()),
+            primary_panel_color: provider
+                .theme
+                .as_ref()
+                .map(|theme| theme.primary_panel.clone()),
+            track_color: provider.theme.as_ref().map(|theme| theme.track.clone()),
+            pill_color: provider.theme.as_ref().map(|theme| theme.pill.clone()),
             source: provider.source.clone(),
             plan: provider.plan.clone(),
             windows: provider
@@ -425,9 +437,30 @@ fn apply_provider_display_settings(
     if !settings.show_image {
         provider.pixel_art = None;
     }
-    if let Some(accent_color) = settings.accent_color.as_deref() {
-        provider.theme_color = Some(accent_color.to_string());
-        provider.theme = Some(theme_from_accent(accent_color));
+    if settings.accent_color.is_some()
+        || settings.primary_panel_color.is_some()
+        || settings.track_color.is_some()
+        || settings.pill_color.is_some()
+    {
+        let mut theme = provider
+            .theme
+            .clone()
+            .or_else(|| provider.theme_color.as_deref().map(theme_from_accent))
+            .unwrap_or_else(|| theme_from_accent("#3B82F6"));
+        if let Some(accent_color) = settings.accent_color.as_deref() {
+            theme.accent = accent_color.to_string();
+            provider.theme_color = Some(accent_color.to_string());
+        }
+        if let Some(primary_panel_color) = settings.primary_panel_color.as_deref() {
+            theme.primary_panel = primary_panel_color.to_string();
+        }
+        if let Some(track_color) = settings.track_color.as_deref() {
+            theme.track = track_color.to_string();
+        }
+        if let Some(pill_color) = settings.pill_color.as_deref() {
+            theme.pill = pill_color.to_string();
+        }
+        provider.theme = Some(theme);
     }
 
     if settings.usage_windows.is_empty() {

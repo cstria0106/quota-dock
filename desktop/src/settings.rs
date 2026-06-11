@@ -39,6 +39,12 @@ pub struct ProviderDisplaySettings {
     pub show_image: bool,
     #[serde(default)]
     pub accent_color: Option<String>,
+    #[serde(default)]
+    pub primary_panel_color: Option<String>,
+    #[serde(default)]
+    pub track_color: Option<String>,
+    #[serde(default)]
+    pub pill_color: Option<String>,
 }
 
 impl Default for ProviderDisplaySettings {
@@ -47,6 +53,9 @@ impl Default for ProviderDisplaySettings {
             usage_windows: Vec::new(),
             show_image: default_show_provider_image(),
             accent_color: None,
+            primary_panel_color: None,
+            track_color: None,
+            pill_color: None,
         }
     }
 }
@@ -86,6 +95,11 @@ impl DesktopSettings {
                         usage_windows: dedupe_usage_windows(settings.usage_windows),
                         show_image: settings.show_image,
                         accent_color: settings.accent_color.filter(|color| is_hex_color(color)),
+                        primary_panel_color: settings
+                            .primary_panel_color
+                            .filter(|color| is_hex_color(color)),
+                        track_color: settings.track_color.filter(|color| is_hex_color(color)),
+                        pill_color: settings.pill_color.filter(|color| is_hex_color(color)),
                     },
                 )
             })

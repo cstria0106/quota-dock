@@ -55,11 +55,12 @@ pub fn run() {
             set_device_language,
             set_provider_enabled,
             set_provider_window_slot,
+            set_provider_window_count,
             add_provider_window,
             remove_provider_window,
             set_provider_image_visible,
-            set_provider_accent_color,
-            reset_provider_accent_color,
+            set_provider_theme_color,
+            reset_provider_theme_colors,
             choose_provider_image,
             clear_provider_image,
             provider_image_preview,
@@ -232,6 +233,19 @@ fn set_provider_window_slot(
 }
 
 #[tauri::command]
+fn set_provider_window_count(
+    provider_id: String,
+    count: usize,
+    state: State<'_, ControllerState>,
+    app: AppHandle,
+) -> Result<AppSnapshot, String> {
+    mutate_and_snapshot(&state, &app, |controller| {
+        controller.set_provider_window_count(&provider_id, count);
+        Ok(())
+    })
+}
+
+#[tauri::command]
 fn add_provider_window(
     provider_id: String,
     kind: String,
@@ -271,26 +285,27 @@ fn set_provider_image_visible(
 }
 
 #[tauri::command]
-fn set_provider_accent_color(
+fn set_provider_theme_color(
     provider_id: String,
+    role: String,
     color: String,
     state: State<'_, ControllerState>,
     app: AppHandle,
 ) -> Result<AppSnapshot, String> {
     mutate_and_snapshot(&state, &app, |controller| {
-        controller.set_provider_accent_color(&provider_id, &color);
+        controller.set_provider_theme_color(&provider_id, &role, &color);
         Ok(())
     })
 }
 
 #[tauri::command]
-fn reset_provider_accent_color(
+fn reset_provider_theme_colors(
     provider_id: String,
     state: State<'_, ControllerState>,
     app: AppHandle,
 ) -> Result<AppSnapshot, String> {
     mutate_and_snapshot(&state, &app, |controller| {
-        controller.reset_provider_accent_color(&provider_id);
+        controller.reset_provider_theme_colors(&provider_id);
         Ok(())
     })
 }
@@ -532,12 +547,14 @@ struct DesktopController {
     setup: SetupFlow,
     status: Option<StatusResponse>,
     latest_snapshot: Option<UsageSnapshot>,
+    latest_collected_snapshot: Option<UsageSnapshot>,
     available_providers: Vec<AvailableProvider>,
     sync_scheduler: SyncScheduler,
     sync_enabled: bool,
     device_language: String,
     send_images_next_sync: bool,
     pending_image_clears: BTreeSet<String>,
+    image_revision: u64,
     log: Vec<String>,
     board_probe_running: bool,
     flash_running: bool,
@@ -565,12 +582,14 @@ impl DesktopController {
             firmware: bundled_firmware(),
             status: None,
             latest_snapshot: None,
+            latest_collected_snapshot: None,
             available_providers: Vec::new(),
             sync_scheduler: SyncScheduler::default(),
             sync_enabled,
             device_language: "ko".to_string(),
             send_images_next_sync: true,
             pending_image_clears: BTreeSet::new(),
+            image_revision: 0,
             log: Vec::new(),
             board_probe_running: false,
             flash_running: false,
@@ -858,6 +877,7 @@ impl DesktopController {
                                 .insert(provider_id.clone(), stored.clone());
                             self.pending_image_clears.remove(&provider_id);
                             self.send_images_next_sync = true;
+                            self.image_revision = self.image_revision.wrapping_add(1);
                             self.sync_scheduler.request_send_now();
                             self.save_settings();
                             self.push_log(format!("{provider_id} image: {}", stored.display()));
@@ -1246,6 +1266,7 @@ impl DesktopController {
     }
 
     fn validate_image(&mut self, provider_id: String, path: PathBuf) {
+        let provider_id = provider_id.to_ascii_lowercase();
         self.validating_images.insert(provider_id.clone());
         if !self.queue(Task::ValidateImage { provider_id, path }) {
             self.validating_images.clear();
@@ -1283,12 +1304,14 @@ impl DesktopController {
     }
 
     fn clear_provider_image(&mut self, provider_id: &str) {
-        if let Some(path) = self.settings.images.remove(provider_id) {
+        let provider_id = provider_id.to_ascii_lowercase();
+        if let Some(path) = self.settings.images.remove(provider_id.as_str()) {
             if path.starts_with(self.images_dir()) {
                 let _ = std::fs::remove_file(&path);
             }
         }
-        self.pending_image_clears.insert(provider_id.to_string());
+        self.pending_image_clears.insert(provider_id.clone());
+        self.image_revision = self.image_revision.wrapping_add(1);
         self.sync_scheduler.request_send_now();
         self.save_settings();
         self.push_log(format!("{provider_id} image cleared"));
@@ -1304,6 +1327,11 @@ impl DesktopController {
                 .disabled_provider_ids
                 .insert(provider_id.clone());
             if let Some(snapshot) = &mut self.latest_snapshot {
+                snapshot
+                    .providers
+                    .retain(|provider| !provider.id.eq_ignore_ascii_case(provider_id.as_str()));
+            }
+            if let Some(snapshot) = &mut self.latest_collected_snapshot {
                 snapshot
                     .providers
                     .retain(|provider| !provider.id.eq_ignore_ascii_case(provider_id.as_str()));
@@ -1333,6 +1361,30 @@ impl DesktopController {
             windows.swap(slot, selected_slot);
         } else {
             windows[slot] = kind.to_string();
+        }
+        self.provider_display_settings_mut(provider_id.as_str())
+            .usage_windows = windows;
+        self.sync_scheduler.request_send_now();
+        self.save_settings();
+    }
+
+    fn set_provider_window_count(&mut self, provider_id: &str, count: usize) {
+        let provider_id = provider_id.to_ascii_lowercase();
+        let count = count.clamp(1, default_usage_window_limit());
+        let mut windows = self.provider_selected_windows(provider_id.as_str());
+        if windows.len() < count {
+            for kind in self.provider_window_options(provider_id.as_str()) {
+                if !windows.iter().any(|window_kind| window_kind == &kind) {
+                    windows.push(kind);
+                    if windows.len() >= count {
+                        break;
+                    }
+                }
+            }
+        }
+        windows.truncate(count);
+        if windows.is_empty() {
+            return;
         }
         self.provider_display_settings_mut(provider_id.as_str())
             .usage_windows = windows;
@@ -1376,18 +1428,29 @@ impl DesktopController {
         self.save_settings();
     }
 
-    fn set_provider_accent_color(&mut self, provider_id: &str, color: &str) {
+    fn set_provider_theme_color(&mut self, provider_id: &str, role: &str, color: &str) {
         if !is_hex_color(color) {
             return;
         }
-        self.provider_display_settings_mut(provider_id).accent_color =
-            Some(color.trim().to_ascii_uppercase());
+        let color = Some(color.trim().to_ascii_uppercase());
+        let settings = self.provider_display_settings_mut(provider_id);
+        match role {
+            "accent" => settings.accent_color = color,
+            "primaryPanel" => settings.primary_panel_color = color,
+            "track" => settings.track_color = color,
+            "pill" => settings.pill_color = color,
+            _ => return,
+        }
         self.sync_scheduler.request_send_now();
         self.save_settings();
     }
 
-    fn reset_provider_accent_color(&mut self, provider_id: &str) {
-        self.provider_display_settings_mut(provider_id).accent_color = None;
+    fn reset_provider_theme_colors(&mut self, provider_id: &str) {
+        let settings = self.provider_display_settings_mut(provider_id);
+        settings.accent_color = None;
+        settings.primary_panel_color = None;
+        settings.track_color = None;
+        settings.pill_color = None;
         self.sync_scheduler.request_send_now();
         self.save_settings();
     }
@@ -1401,7 +1464,7 @@ impl DesktopController {
             now,
             self.settings.sync_interval_secs,
             self.last_sync_ok,
-            self.latest_snapshot.is_some(),
+            self.latest_collected_snapshot.is_some(),
             self.sync_running,
         ) else {
             return;
@@ -1409,7 +1472,7 @@ impl DesktopController {
 
         let force_images = self.send_images_next_sync;
         let cached_snapshot = (!decision.refresh_usage)
-            .then(|| self.latest_snapshot.clone())
+            .then(|| self.latest_collected_snapshot.clone())
             .flatten();
         let cached_available_providers = if decision.refresh_usage {
             Vec::new()
@@ -1439,6 +1502,7 @@ impl DesktopController {
     fn handle_sync_report(&mut self, report: SyncReport) {
         self.sync_running = false;
         self.available_providers = report.available_providers;
+        self.latest_collected_snapshot = Some(report.collected_snapshot);
         self.latest_snapshot = Some(report.snapshot);
         self.last_sync_ok = Some(report.ok);
         self.last_sync_message = report.message.clone();
@@ -1479,7 +1543,41 @@ impl DesktopController {
                     .and_then(|settings| settings.accent_color.clone())
                     .or_else(|| provider.accent_color.clone())
                     .or_else(|| {
-                        provider_accent_color(self.latest_snapshot.as_ref(), provider.id.as_str())
+                        provider_theme_color(
+                            self.latest_snapshot.as_ref(),
+                            provider.id.as_str(),
+                            "accent",
+                        )
+                    });
+                let primary_panel_color = display
+                    .and_then(|settings| settings.primary_panel_color.clone())
+                    .or_else(|| provider.primary_panel_color.clone())
+                    .or_else(|| {
+                        provider_theme_color(
+                            self.latest_snapshot.as_ref(),
+                            provider.id.as_str(),
+                            "primaryPanel",
+                        )
+                    });
+                let track_color = display
+                    .and_then(|settings| settings.track_color.clone())
+                    .or_else(|| provider.track_color.clone())
+                    .or_else(|| {
+                        provider_theme_color(
+                            self.latest_snapshot.as_ref(),
+                            provider.id.as_str(),
+                            "track",
+                        )
+                    });
+                let pill_color = display
+                    .and_then(|settings| settings.pill_color.clone())
+                    .or_else(|| provider.pill_color.clone())
+                    .or_else(|| {
+                        provider_theme_color(
+                            self.latest_snapshot.as_ref(),
+                            provider.id.as_str(),
+                            "pill",
+                        )
                     });
                 let windows = self
                     .provider_window_options(provider_id.as_str())
@@ -1507,11 +1605,15 @@ impl DesktopController {
                     usage_window_limit,
                     show_image,
                     accent_color,
+                    primary_panel_color,
+                    track_color,
+                    pill_color,
                     image_path: self
                         .settings
                         .images
                         .get(provider_id.as_str())
                         .map(|path| path.display().to_string()),
+                    image_revision: self.image_revision,
                     validating_image: self.validating_images.contains(provider_id.as_str()),
                     windows,
                 }
@@ -1859,7 +1961,11 @@ struct ProviderOptionSnapshot {
     usage_window_limit: usize,
     show_image: bool,
     accent_color: Option<String>,
+    primary_panel_color: Option<String>,
+    track_color: Option<String>,
+    pill_color: Option<String>,
     image_path: Option<String>,
+    image_revision: u64,
     validating_image: bool,
     windows: Vec<ProviderWindowOptionSnapshot>,
 }
@@ -1978,17 +2084,35 @@ fn compare_prerelease_part(left: &str, right: &str) -> Ordering {
     }
 }
 
-fn provider_accent_color(snapshot: Option<&UsageSnapshot>, provider_id: &str) -> Option<String> {
+fn provider_theme_color(
+    snapshot: Option<&UsageSnapshot>,
+    provider_id: &str,
+    role: &str,
+) -> Option<String> {
     snapshot?
         .providers
         .iter()
         .find(|provider| provider.id.eq_ignore_ascii_case(provider_id))
         .and_then(|provider| {
-            provider
-                .theme
-                .as_ref()
-                .map(|theme| theme.accent.clone())
-                .or_else(|| provider.theme_color.clone())
+            let theme = provider.theme.as_ref()?;
+            Some(match role {
+                "accent" => theme.accent.clone(),
+                "primaryPanel" => theme.primary_panel.clone(),
+                "track" => theme.track.clone(),
+                "pill" => theme.pill.clone(),
+                _ => return None,
+            })
+        })
+        .or_else(|| {
+            (role == "accent")
+                .then(|| {
+                    snapshot?
+                        .providers
+                        .iter()
+                        .find(|provider| provider.id.eq_ignore_ascii_case(provider_id))
+                        .and_then(|provider| provider.theme_color.clone())
+                })
+                .flatten()
         })
 }
 
@@ -2207,12 +2331,14 @@ impl DesktopController {
             firmware: bundled_firmware(),
             status: None,
             latest_snapshot: None,
+            latest_collected_snapshot: None,
             available_providers: Vec::new(),
             sync_scheduler: SyncScheduler::default(),
             sync_enabled: false,
             device_language: "ko".to_string(),
             send_images_next_sync: true,
             pending_image_clears: BTreeSet::new(),
+            image_revision: 0,
             log: Vec::new(),
             board_probe_running: false,
             flash_running: false,

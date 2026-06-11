@@ -3,8 +3,6 @@ import {
   Gauge,
   ImagePlus,
   MonitorDot,
-  Palette,
-  Plus,
   RefreshCw,
   Repeat,
   RotateCcw,
@@ -12,7 +10,6 @@ import {
   SlidersHorizontal,
   Trash2,
   Wrench,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -564,6 +561,45 @@ function ProviderSettingsCard({
   const visibleWindows = provider.windows
     .filter((window) => window.enabled)
     .slice(0, provider.usageWindowLimit);
+  const [themeDraft, setThemeDraft] = React.useState<PreviewTheme>(() =>
+    providerPreviewTheme(provider),
+  );
+  const themeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    setThemeDraft(providerPreviewTheme(provider));
+  }, [
+    provider.accentColor,
+    provider.primaryPanelColor,
+    provider.trackColor,
+    provider.pillColor,
+  ]);
+
+  React.useEffect(
+    () => () => {
+      if (themeTimerRef.current) {
+        clearTimeout(themeTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  const handleThemeChange = React.useCallback(
+    (role: ThemeRole, color: string) => {
+      setThemeDraft((current) => ({ ...current, [role]: color }));
+      if (themeTimerRef.current) {
+        clearTimeout(themeTimerRef.current);
+      }
+      themeTimerRef.current = setTimeout(() => {
+        void onRunCommand("set_provider_theme_color", {
+          providerId: provider.id,
+          role,
+          color,
+        });
+      }, 400);
+    },
+    [onRunCommand, provider.id],
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -587,7 +623,13 @@ function ProviderSettingsCard({
     return () => {
       cancelled = true;
     };
-  }, [provider.id, provider.imagePath, provider.showImage, provider.validatingImage]);
+  }, [
+    provider.id,
+    provider.imagePath,
+    provider.imageRevision,
+    provider.showImage,
+    provider.validatingImage,
+  ]);
 
   return (
     <div className="grid gap-4 rounded-lg border p-4">
@@ -610,11 +652,21 @@ function ProviderSettingsCard({
       </div>
 
       {provider.enabled ? (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_15rem]">
           <QuotaPreview
-            accentColor={provider.accentColor ?? "#3B82F6"}
             availableWindows={provider.windows}
             image={provider.showImage ? preview : null}
+            imagePath={provider.imagePath}
+            onImageChoose={() => {
+              void onRunCommand("choose_provider_image", {
+                providerId: provider.id,
+              });
+            }}
+            onImageClear={() => {
+              void onRunCommand("clear_provider_image", {
+                providerId: provider.id,
+              });
+            }}
             onSlotChange={(slot, kind) => {
               void onRunCommand("set_provider_window_slot", {
                 providerId: provider.id,
@@ -622,37 +674,31 @@ function ProviderSettingsCard({
                 kind,
               });
             }}
-            onSlotRemove={(slot) => {
-              void onRunCommand("remove_provider_window", {
-                providerId: provider.id,
-                slot,
-              });
-            }}
-            onWindowAdd={(kind) => {
-              void onRunCommand("add_provider_window", {
-                providerId: provider.id,
-                kind,
-              });
-            }}
             t={t}
+            theme={themeDraft}
+            validatingImage={provider.validatingImage}
             windows={visibleWindows}
           />
           <div className="grid content-start gap-4">
-            <ImageControls
-              onRunCommand={onRunCommand}
-              provider={provider}
+            <WindowCountControl
+              count={provider.usageWindowLimit}
+              max={provider.windows.length}
+              onChange={(count) => {
+                void onRunCommand("set_provider_window_count", {
+                  providerId: provider.id,
+                  count,
+                });
+              }}
               t={t}
             />
             <ColorControl
-              color={provider.accentColor ?? "#3B82F6"}
-              onChange={(color) => {
-                void onRunCommand("set_provider_accent_color", {
-                  providerId: provider.id,
-                  color,
-                });
-              }}
+              colors={themeDraft}
+              onChange={handleThemeChange}
               onReset={() => {
-                void onRunCommand("reset_provider_accent_color", {
+                if (themeTimerRef.current) {
+                  clearTimeout(themeTimerRef.current);
+                }
+                void onRunCommand("reset_provider_theme_colors", {
                   providerId: provider.id,
                 });
               }}
@@ -665,165 +711,156 @@ function ProviderSettingsCard({
   );
 }
 
-function ImageControls({
-  onRunCommand,
-  provider,
+function WindowCountControl({
+  count,
+  max,
+  onChange,
   t,
 }: {
-  onRunCommand: RunCommand;
-  provider: ProviderOptionSnapshot;
+  count: number;
+  max: number;
+  onChange: (count: number) => void;
   t: TFunction;
 }) {
   return (
     <div className="grid gap-2">
-      <div className="flex items-center justify-between gap-3">
-        <Label>{t("dock.providers.image")}</Label>
-        <Switch
-          checked={provider.showImage}
-          onCheckedChange={(visible) => {
-            void onRunCommand("set_provider_image_visible", {
-              providerId: provider.id,
-              visible,
-            });
-          }}
-        />
-      </div>
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={provider.validatingImage}
-          onClick={() => {
-            void onRunCommand("choose_provider_image", {
-              providerId: provider.id,
-            });
-          }}
-        >
-          <ImagePlus />
-          {t("dock.images.choose")}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          disabled={!provider.imagePath}
-          title={t("dock.images.clear")}
-          onClick={() => {
-            void onRunCommand("clear_provider_image", {
-              providerId: provider.id,
-            });
-          }}
-        >
-          <Trash2 />
-        </Button>
+      <Label>{t("dock.providers.count")}</Label>
+      <div className="grid grid-cols-3 gap-1 rounded-md bg-muted p-1">
+        {[1, 2, 3].map((value) => (
+          <button
+            key={value}
+            type="button"
+            disabled={value > max}
+            onClick={() => onChange(value)}
+            className={cn(
+              "h-8 rounded-sm text-sm font-medium tabular-nums transition-colors disabled:cursor-not-allowed disabled:text-muted-foreground/35",
+              count === value
+                ? "bg-background text-foreground shadow-xs"
+                : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
+            )}
+          >
+            {value}
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
 function ColorControl({
-  color,
+  colors,
   onChange,
   onReset,
   t,
 }: {
-  color: string;
-  onChange: (color: string) => void;
+  colors: PreviewTheme;
+  onChange: (role: ThemeRole, color: string) => void;
   onReset: () => void;
   t: TFunction;
 }) {
+  const swatches: Array<{ role: ThemeRole; label: string }> = [
+    { role: "accent", label: "Accent" },
+    { role: "primaryPanel", label: "Panel" },
+    { role: "track", label: "Track" },
+    { role: "pill", label: "Pill" },
+  ];
+
   return (
-    <div className="grid gap-2">
-      <Label>{t("dock.providers.accent")}</Label>
-      <div className="flex gap-2">
-        <label className="relative grid size-9 place-items-center overflow-hidden rounded-md border">
-          <Palette className="pointer-events-none absolute size-4 text-muted-foreground" />
-          <input
-            aria-label="강조색"
-            className="size-12 cursor-pointer opacity-0"
-            type="color"
-            value={color}
-            onChange={(event) => onChange(event.currentTarget.value)}
-          />
-        </label>
-        <Badge variant="secondary" className="min-w-24 justify-center">
-          {color}
-        </Badge>
+    <div className="grid gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <Label>{t("dock.providers.accent")}</Label>
         <Button
           type="button"
-          variant="outline"
+          variant="ghost"
           size="icon"
+          className="size-7"
           title={t("dock.providers.defaultColor")}
           onClick={onReset}
         >
-          <RotateCcw />
+          <RotateCcw className="size-3.5" />
         </Button>
+      </div>
+      <div className="grid grid-cols-2 gap-2 xl:grid-cols-1">
+        {swatches.map((swatch) => (
+          <label
+            key={swatch.role}
+            className="group relative grid cursor-pointer grid-cols-[auto_minmax(0,1fr)] items-center gap-2 rounded-md px-1.5 py-1.5 transition-colors hover:bg-muted/60"
+          >
+            <span
+              className="size-6 rounded-sm"
+              style={{ backgroundColor: colors[swatch.role] }}
+            />
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-medium">
+                {swatch.label}
+              </span>
+              <span className="block truncate text-[11px] tabular-nums text-muted-foreground">
+                {colors[swatch.role]}
+              </span>
+            </span>
+            <input
+              aria-label={swatch.label}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              type="color"
+              value={colors[swatch.role]}
+              onChange={(event) => onChange(swatch.role, event.currentTarget.value)}
+            />
+          </label>
+        ))}
       </div>
     </div>
   );
 }
 
 function QuotaPreview({
-  accentColor,
   availableWindows,
   image,
+  imagePath,
+  onImageChoose,
+  onImageClear,
   onSlotChange,
-  onSlotRemove,
-  onWindowAdd,
   t,
+  theme,
+  validatingImage,
   windows,
 }: {
-  accentColor: string;
   availableWindows: ProviderWindowOptionSnapshot[];
   image: string | null;
+  imagePath?: string | null;
+  onImageChoose: () => void;
+  onImageClear: () => void;
   onSlotChange: (slot: number, kind: string) => void;
-  onSlotRemove: (slot: number) => void;
-  onWindowAdd: (kind: string) => void;
   t: TFunction;
+  theme: PreviewTheme;
+  validatingImage: boolean;
   windows: ProviderWindowOptionSnapshot[];
 }) {
-  const panelStyle = previewTheme(accentColor);
-  const addOptions = availableWindows.filter(
-    (option) => !windows.some((window) => window.kind === option.kind),
-  );
   if (windows.length === 0) {
     return <EmptyState label={t("dock.providers.noWindows")} />;
   }
 
   return (
-    <div className="grid aspect-[5/3] min-h-52 content-center gap-3 rounded-lg border bg-zinc-950 p-4">
+    <div className="grid min-h-52 content-center gap-3 overflow-visible py-3">
       <PreviewUsageCard
         availableWindows={availableWindows}
         image={image}
+        imagePath={imagePath}
+        onImageChoose={onImageChoose}
+        onImageClear={onImageClear}
         onWindowChange={(kind) => onSlotChange(0, kind)}
-        onWindowRemove={windows.length > 1 ? () => onSlotRemove(0) : undefined}
         primary
-        style={panelStyle}
+        theme={theme}
+        validatingImage={validatingImage}
         window={windows[0]}
       />
-      {windows.length === 1 && addOptions.length > 0 ? (
-        <PreviewAddCard
-          options={addOptions}
-          onAdd={onWindowAdd}
-          style={panelStyle}
-        />
-      ) : null}
       {windows.length === 2 ? (
-        <div className="grid grid-cols-2 gap-3">
+        <div>
           <PreviewUsageCard
             availableWindows={availableWindows}
             onWindowChange={(kind) => onSlotChange(1, kind)}
-            onWindowRemove={() => onSlotRemove(1)}
-            style={panelStyle}
+            theme={theme}
             window={windows[1]}
           />
-          {addOptions.length > 0 ? (
-            <PreviewAddCard
-              options={addOptions}
-              onAdd={onWindowAdd}
-              style={panelStyle}
-            />
-          ) : null}
         </div>
       ) : null}
       {windows.length >= 3 ? (
@@ -831,15 +868,13 @@ function QuotaPreview({
           <PreviewUsageCard
             availableWindows={availableWindows}
             onWindowChange={(kind) => onSlotChange(1, kind)}
-            onWindowRemove={() => onSlotRemove(1)}
-            style={panelStyle}
+            theme={theme}
             window={windows[1]}
           />
           <PreviewUsageCard
             availableWindows={availableWindows}
             onWindowChange={(kind) => onSlotChange(2, kind)}
-            onWindowRemove={() => onSlotRemove(2)}
-            style={panelStyle}
+            theme={theme}
             window={windows[2]}
           />
         </div>
@@ -848,77 +883,72 @@ function QuotaPreview({
   );
 }
 
-function PreviewAddCard({
-  onAdd,
-  options,
-  style,
-}: {
-  onAdd: (kind: string) => void;
-  options: ProviderWindowOptionSnapshot[];
-  style: React.CSSProperties;
-}) {
-  return (
-    <div
-      className="grid min-h-20 place-items-center rounded-md border border-dashed border-white/20 p-3 text-white"
-      style={style}
-    >
-      <Select onValueChange={onAdd}>
-        <SelectTrigger className="size-10 rounded-full border-white/10 bg-black/25 p-0 text-white">
-          <Plus className="mx-auto size-5" />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option.kind} value={option.kind}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
-
 function PreviewUsageCard({
   availableWindows,
   image,
+  imagePath,
+  onImageChoose,
+  onImageClear,
   onWindowChange,
-  onWindowRemove,
   primary = false,
-  style,
+  theme,
+  validatingImage = false,
   window,
 }: {
   availableWindows: ProviderWindowOptionSnapshot[];
   image?: string | null;
+  imagePath?: string | null;
+  onImageChoose?: () => void;
+  onImageClear?: () => void;
   onWindowChange: (kind: string) => void;
-  onWindowRemove?: () => void;
   primary?: boolean;
-  style: React.CSSProperties;
+  theme: PreviewTheme;
+  validatingImage?: boolean;
   window: ProviderWindowOptionSnapshot;
 }) {
-  const percent = boundedPercent(window.used_percent);
+  const percent = boundedPercent(window.usedPercent);
   return (
     <div
       className={cn(
         "relative grid min-h-20 gap-3 rounded-md p-3 text-white",
-        primary && image ? "grid-cols-[4.5rem_minmax(0,1fr)] items-center" : "",
+        primary ? "grid-cols-[5.75rem_minmax(0,1fr)] items-center" : "",
       )}
-      style={style}
+      style={{ backgroundColor: theme.primaryPanel }}
     >
-      {onWindowRemove ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="absolute top-2 right-2 size-6 border-white/10 bg-black/25 text-white hover:bg-black/40 hover:text-white"
-          onClick={onWindowRemove}
-        >
-          <X className="size-3" />
-        </Button>
-      ) : null}
-      {primary && image ? (
-        <span className="grid aspect-square place-items-center overflow-hidden rounded-md bg-black/20">
-          <img alt="" className="size-full object-contain" src={image} />
-        </span>
+      {primary ? (
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5">
+          <span className="grid aspect-square place-items-center overflow-hidden rounded-md">
+            {image ? (
+              <img alt="" className="size-full object-contain" src={image} />
+            ) : (
+              <ImagePlus className="size-5 text-white/60" />
+            )}
+          </span>
+          <div className="grid gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-6 border-white/10 bg-black/25 text-white hover:bg-black/40 hover:text-white"
+              disabled={validatingImage}
+              onClick={onImageChoose}
+              title="이미지 선택"
+            >
+              <ImagePlus className="size-3" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-6 border-white/10 bg-black/25 text-white hover:bg-black/40 hover:text-white"
+              disabled={!imagePath}
+              onClick={onImageClear}
+              title="이미지 제거"
+            >
+              <Trash2 className="size-3" />
+            </Button>
+          </div>
+        </div>
       ) : null}
       <div className="grid min-w-0 content-center gap-2">
         <div className="flex items-center justify-between gap-3">
@@ -926,7 +956,10 @@ function PreviewUsageCard({
             {Math.round(percent)}%
           </span>
           <Select value={window.kind} onValueChange={onWindowChange}>
-            <SelectTrigger className="h-7 w-auto min-w-20 rounded-full border-white/10 bg-black/25 px-2 py-1 text-xs text-white">
+            <SelectTrigger
+              className="h-7 w-auto min-w-20 rounded-full border-transparent px-2 py-1 text-xs text-white"
+              style={{ backgroundColor: theme.pill }}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -938,17 +971,53 @@ function PreviewUsageCard({
             </SelectContent>
           </Select>
         </div>
-        <Progress value={percent} />
+        <div
+          className="h-2.5 overflow-hidden rounded-full"
+          style={{ backgroundColor: theme.track }}
+        >
+          <div
+            className="h-full rounded-full"
+            style={{ backgroundColor: theme.accent, width: `${percent}%` }}
+          />
+        </div>
       </div>
     </div>
   );
 }
 
-function previewTheme(accentColor: string): React.CSSProperties {
+interface PreviewTheme {
+  accent: string;
+  primaryPanel: string;
+  track: string;
+  pill: string;
+}
+
+type ThemeRole = keyof PreviewTheme;
+
+const DEFAULT_PREVIEW_THEME: PreviewTheme = {
+  accent: "#36B2CA",
+  primaryPanel: "#2D303A",
+  track: "#2D303A",
+  pill: "#2D303A",
+};
+
+function providerPreviewTheme(provider: ProviderOptionSnapshot): PreviewTheme {
   return {
-    background: `linear-gradient(135deg, ${accentColor}2E, #111827)`,
-    borderColor: `${accentColor}44`,
+    accent: normalizeHexColor(provider.accentColor) ?? DEFAULT_PREVIEW_THEME.accent,
+    primaryPanel:
+      normalizeHexColor(provider.primaryPanelColor) ??
+      DEFAULT_PREVIEW_THEME.primaryPanel,
+    track: normalizeHexColor(provider.trackColor) ?? DEFAULT_PREVIEW_THEME.track,
+    pill: normalizeHexColor(provider.pillColor) ?? DEFAULT_PREVIEW_THEME.pill,
   };
+}
+
+function normalizeHexColor(value?: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const hex = value.trim();
+  return /^#[0-9a-fA-F]{6}$/.test(hex) ? hex.toUpperCase() : null;
 }
 
 function DevicePanel({
