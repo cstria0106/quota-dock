@@ -16,7 +16,7 @@ export function AppHeader({
   return (
     <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-center gap-3">
-        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
+        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-card text-primary ring-1 ring-border">
           <MonitorDot className="size-5" />
         </span>
         <div className="min-w-0">

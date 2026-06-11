@@ -100,7 +100,7 @@ export function SetupView({
           <div className="grid w-full justify-items-center gap-4">
             <div
               className={cn(
-                "grid size-24 place-items-center rounded-lg bg-emerald-50 text-emerald-700 ring-1 ring-emerald-900/10",
+                "grid size-24 place-items-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15",
                 setup.busy && "animate-pulse",
               )}
             >
@@ -136,7 +136,7 @@ export function SetupView({
       <Dialog open={flashConfirmOpen} onOpenChange={onFlashConfirmOpenChange}>
         <DialogContent className="rounded-lg sm:max-w-md">
           <DialogHeader>
-            <div className="mb-1 grid size-11 place-items-center rounded-lg bg-red-50 text-red-700">
+            <div className="mb-1 grid size-11 place-items-center rounded-lg bg-destructive/10 text-destructive">
               <TriangleAlert className="size-5" />
             </div>
             <DialogTitle>{firmwareFlashTitle(firmwareReason, t)}</DialogTitle>
@@ -200,7 +200,7 @@ function SetupStageBody({
 }) {
   if (setup.stage === "waiting_for_board" || setup.stage === "checking_firmware") {
     return (
-      <div className="flex flex-wrap items-center justify-center gap-3">
+      <div className="flex flex-col items-center gap-4">
         <Spinner />
         <Button
           type="button"
@@ -266,8 +266,12 @@ function SetupStageBody({
               {t("setup.firmware.skip")}
             </Button>
           ) : null}
-          {setup.stage === "flashing" ? <Spinner /> : null}
         </div>
+        {setup.stage === "flashing" ? (
+          <div className="flex justify-center">
+            <Spinner />
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -345,11 +349,15 @@ function SetupSteps({ stage, t }: { stage: SetupStage; t: TFunction }) {
             key={step.stage}
             className={cn(
               "flex min-w-0 items-center justify-center gap-2 border-b px-3 py-3 text-sm font-medium text-muted-foreground last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0",
-              done && "bg-emerald-50 text-emerald-800",
-              active && "bg-emerald-100 text-emerald-900",
+              done && "text-primary",
+              active && "bg-primary text-primary-foreground",
             )}
           >
-            <Icon className="size-4 shrink-0" />
+            {done ? (
+              <CircleCheck className="size-4 shrink-0" />
+            ) : (
+              <Icon className="size-4 shrink-0" />
+            )}
             <span className="truncate">{step.label}</span>
           </div>
         );

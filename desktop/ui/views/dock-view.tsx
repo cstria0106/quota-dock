@@ -761,7 +761,7 @@ function WindowCountControl({
             className={cn(
               "h-8 rounded-sm text-sm font-medium tabular-nums transition-colors disabled:cursor-not-allowed disabled:text-muted-foreground/35",
               count === value
-                ? "bg-background text-foreground shadow-xs"
+                ? "bg-primary text-primary-foreground shadow-xs"
                 : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
             )}
           >
