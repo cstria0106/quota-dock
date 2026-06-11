@@ -62,7 +62,7 @@ impl QuotaDockApp {
                                 .insert(provider_id.clone(), path.clone());
                             self.pending_image_clears.remove(&provider_id);
                             self.send_images_next_sync = true;
-                            self.sync_scheduler.request_now();
+                            self.sync_scheduler.request_send_now();
                             self.save_settings();
                             self.push_log(format!("{provider_id} image: {}", path.display()));
                         }

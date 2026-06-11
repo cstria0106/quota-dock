@@ -88,7 +88,7 @@ impl QuotaDockApp {
     pub(super) fn clear_provider_image(&mut self, provider_id: &str) {
         self.settings.images.remove(provider_id);
         self.pending_image_clears.insert(provider_id.to_string());
-        self.sync_scheduler.request_now();
+        self.sync_scheduler.request_send_now();
         self.save_settings();
         self.push_log(format!("{provider_id} image cleared"));
     }
@@ -107,6 +107,9 @@ impl QuotaDockApp {
                     .providers
                     .retain(|provider| !provider.id.eq_ignore_ascii_case(provider_id.as_str()));
             }
+            self.sync_scheduler.request_send_now();
+            self.save_settings();
+            return;
         }
         self.sync_scheduler.request_now();
         self.save_settings();
@@ -127,24 +130,40 @@ impl QuotaDockApp {
         if !self.sync_enabled || !self.can_use_http() {
             return;
         }
-        if !self.sync_scheduler.should_start(
-            Instant::now(),
+        let now = Instant::now();
+        let Some(decision) = self.sync_scheduler.should_start(
+            now,
             self.settings.sync_interval_secs,
+            self.last_sync_ok,
+            self.latest_snapshot.is_some(),
             self.sync_running,
-        ) {
+        ) else {
             return;
-        }
+        };
 
         let force_images = self.send_images_next_sync;
+        let cached_snapshot = (!decision.refresh_usage)
+            .then(|| self.latest_snapshot.clone())
+            .flatten();
+        let cached_available_providers = if decision.refresh_usage {
+            Vec::new()
+        } else {
+            self.available_providers.clone()
+        };
         self.sync_running = true;
-        self.sync_scheduler.mark_started(Instant::now());
-        if !self.queue(Task::SyncUsage {
+        if self.queue(Task::SyncUsage {
             device_url: normalize_device_url(&self.settings.device_url),
             disabled_provider_ids: self.settings.disabled_provider_ids.clone(),
             image_paths: self.settings.images.clone(),
             force_images,
             clear_image_ids: self.pending_image_clears.iter().cloned().collect(),
+            cached_snapshot,
+            cached_available_providers,
+            refresh_usage: decision.refresh_usage,
         }) {
+            self.sync_scheduler
+                .mark_started(now, decision.refresh_usage);
+        } else {
             self.sync_running = false;
         }
     }

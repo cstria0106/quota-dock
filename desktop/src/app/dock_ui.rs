@@ -1,6 +1,8 @@
 use eframe::egui;
 use quota_dock_core::DeviceCommand;
 
+use crate::settings::MIN_SYNC_INTERVAL_SECS;
+
 use super::{QuotaDockApp, PROVIDER_IMAGES};
 
 impl QuotaDockApp {
@@ -11,7 +13,7 @@ impl QuotaDockApp {
             ui.label("Interval");
             let interval = ui.add(
                 egui::DragValue::new(&mut self.settings.sync_interval_secs)
-                    .range(5..=3_600)
+                    .range(MIN_SYNC_INTERVAL_SECS..=3_600)
                     .speed(1.0)
                     .suffix(" s"),
             );

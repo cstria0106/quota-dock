@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SYNC_INTERVAL_SECS: u64 = 60;
-pub const MIN_SYNC_INTERVAL_SECS: u64 = 5;
+pub const MIN_SYNC_INTERVAL_SECS: u64 = 60;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DesktopSettings {

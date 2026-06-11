@@ -51,6 +51,9 @@ pub enum Task {
         image_paths: BTreeMap<String, PathBuf>,
         force_images: bool,
         clear_image_ids: Vec<String>,
+        cached_snapshot: Option<UsageSnapshot>,
+        cached_available_providers: Vec<AvailableProvider>,
+        refresh_usage: bool,
     },
     ValidateImage {
         provider_id: String,
@@ -170,13 +173,19 @@ fn run_task(task: Task) -> TaskResult {
             image_paths,
             force_images,
             clear_image_ids,
-        } => TaskResult::SyncUsage(sync_usage(
-            &device_url,
-            &disabled_provider_ids,
-            &image_paths,
+            cached_snapshot,
+            cached_available_providers,
+            refresh_usage,
+        } => TaskResult::SyncUsage(sync_usage(SyncUsageRequest {
+            device_url,
+            disabled_provider_ids,
+            image_paths,
             force_images,
-            &clear_image_ids,
-        )),
+            clear_image_ids,
+            cached_snapshot,
+            cached_available_providers,
+            refresh_usage,
+        })),
         Task::ValidateImage { provider_id, path } => {
             let result = validate_provider_image(&path).map(|_| ());
             TaskResult::ValidateImage {
@@ -188,25 +197,32 @@ fn run_task(task: Task) -> TaskResult {
     }
 }
 
-fn sync_usage(
-    device_url: &str,
-    disabled_provider_ids: &BTreeSet<String>,
-    image_paths: &BTreeMap<String, PathBuf>,
+struct SyncUsageRequest {
+    device_url: String,
+    disabled_provider_ids: BTreeSet<String>,
+    image_paths: BTreeMap<String, PathBuf>,
     force_images: bool,
-    clear_image_ids: &[String],
-) -> SyncReport {
-    let collected_snapshot = collect_snapshot(ProviderSelection::All);
-    let available_providers = collected_snapshot
-        .providers
-        .iter()
-        .filter(|provider| is_available_provider(provider))
-        .map(|provider| AvailableProvider {
-            id: provider.id.clone(),
-            label: provider.label.clone(),
-            source: provider.source.clone(),
-            plan: provider.plan.clone(),
-        })
-        .collect::<Vec<_>>();
+    clear_image_ids: Vec<String>,
+    cached_snapshot: Option<UsageSnapshot>,
+    cached_available_providers: Vec<AvailableProvider>,
+    refresh_usage: bool,
+}
+
+fn sync_usage(request: SyncUsageRequest) -> SyncReport {
+    let SyncUsageRequest {
+        device_url,
+        disabled_provider_ids,
+        image_paths,
+        force_images,
+        clear_image_ids,
+        cached_snapshot,
+        cached_available_providers,
+        refresh_usage,
+    } = request;
+    let (collected_snapshot, available_providers) = match (refresh_usage, cached_snapshot) {
+        (false, Some(snapshot)) => (snapshot, cached_available_providers),
+        _ => collect_usage_data(),
+    };
     let mut snapshot = UsageSnapshot {
         providers: collected_snapshot
             .providers
@@ -220,7 +236,7 @@ fn sync_usage(
     let mut failures = Vec::new();
     let provider_count = snapshot.providers.len();
 
-    let provider_images = match local_provider_images(&snapshot, image_paths) {
+    let provider_images = match local_provider_images(&snapshot, &image_paths) {
         Ok(provider_images) => provider_images,
         Err(err) => {
             failures.push(err);
@@ -237,7 +253,7 @@ fn sync_usage(
     let first_image_count = image_payload_count(&first_payload);
     let first_bytes = postcard_len(&first_payload).unwrap_or_default();
     let mut image_update_count = 0;
-    match http_sync(device_url, &first_payload) {
+    match http_sync(&device_url, &first_payload) {
         Ok(response) if response.ok => {
             image_update_count += first_image_count;
             image_provider_ids = response
@@ -258,7 +274,7 @@ fn sync_usage(
         let image_payload = sync_payload(&snapshot, &provider_images, false, &image_provider_ids);
         let image_count = image_payload_count(&image_payload);
         let image_bytes = postcard_len(&image_payload).unwrap_or_default();
-        match http_sync(device_url, &image_payload) {
+        match http_sync(&device_url, &image_payload) {
             Ok(response) if response.ok => image_update_count += image_count,
             Ok(response) => failures.push(format!(
                 "image sync rejected {} bytes: {}",
@@ -285,14 +301,27 @@ fn sync_usage(
         available_providers,
         ok,
         sent_images: force_images || image_update_count > 0 || !clear_image_ids.is_empty(),
-        cleared_images: if ok {
-            clear_image_ids.to_vec()
-        } else {
-            Vec::new()
-        },
+        cleared_images: if ok { clear_image_ids } else { Vec::new() },
         provider_count,
         message,
     }
+}
+
+fn collect_usage_data() -> (UsageSnapshot, Vec<AvailableProvider>) {
+    let collected_snapshot = collect_snapshot(ProviderSelection::All);
+    let available_providers = collected_snapshot
+        .providers
+        .iter()
+        .filter(|provider| is_available_provider(provider))
+        .map(|provider| AvailableProvider {
+            id: provider.id.clone(),
+            label: provider.label.clone(),
+            source: provider.source.clone(),
+            plan: provider.plan.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    (collected_snapshot, available_providers)
 }
 
 fn is_available_provider(provider: &quota_dock_core::UsageProvider) -> bool {
